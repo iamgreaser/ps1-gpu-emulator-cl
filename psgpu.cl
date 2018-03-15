@@ -395,12 +395,10 @@
                                 (cd1 (aref gp0-buffer ,(+ color-offset  (* color-step  1))))
                                 (cd2 (aref gp0-buffer ,(+ color-offset  (* color-step  2))))
                                 ,@(lets-for-triangle
-                                    (ct cd (make-array 3
-                                             :element-type 'fixnum
-                                             :initial-contents (list
-                                                                 (logand #xFF (ash $x -16))
-                                                                 (logand #xFF (ash $x -8))
-                                                                 (logand #xFF (ash $x -0))))))
+                                    (cr cd (logand #xFF (ash $x  -0)))
+                                    (cg cd (logand #xFF (ash $x  -8)))
+                                    (cb cd (logand #xFF (ash $x -16)))
+                                    )
                                 ))
                           ,@(when texture-mapped
                               `((td0 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 0))))
@@ -452,7 +450,10 @@
                        (when (< y2 y1)
                          (swap-pair x1 x2)
                          ,@(when gouraud-shaded
-                             `((swap-pair ct1 ct2)))
+                             `((swap-pair cr1 cr2)
+                               (swap-pair cg1 cg2)
+                               (swap-pair cb1 cb2)
+                               ))
                          ,@(when texture-mapped
                              `((swap-pair s1 s2)
                                (swap-pair t1 t2)))
@@ -461,7 +462,10 @@
                        (when (< y1 y0)
                          (swap-pair x0 x1)
                          ,@(when gouraud-shaded
-                             `((swap-pair ct0 ct1)))
+                             `((swap-pair cr0 cr1)
+                               (swap-pair cg0 cg1)
+                               (swap-pair cb0 cb1)
+                               ))
                          ,@(when texture-mapped
                              `((swap-pair s0 s1)
                                (swap-pair t0 t1)))
@@ -470,7 +474,10 @@
                        (when (< y2 y1)
                          (swap-pair x1 x2)
                          ,@(when gouraud-shaded
-                             `((swap-pair ct1 ct2)))
+                             `((swap-pair cr1 cr2)
+                               (swap-pair cg1 cg2)
+                               (swap-pair cb1 cb2)
+                               ))
                          ,@(when texture-mapped
                              `((swap-pair s1 s2)
                                (swap-pair t1 t2)))
@@ -487,9 +494,9 @@
 
                               ,@(when gouraud-shaded
                                   `(,@(lets-for-lerp-steps-1
-                                        (cr (aref ct0 2) (aref ct1 2) (aref ct2 2))
-                                        (cg (aref ct0 1) (aref ct1 1) (aref ct2 1))
-                                        (cb (aref ct0 0) (aref ct1 0) (aref ct2 0))
+                                        (cr cr0 cr1 cr2)
+                                        (cg cg0 cg1 cg2)
+                                        (cb cb0 cb1 cb2)
                                         )
                                     ))
 
