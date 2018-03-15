@@ -19,6 +19,9 @@
   `(multiple-value-setq (,p1 ,p2) (values ,p2 ,p1)))
 
 (defparameter *bilerpers* t)
+(defmacro with-render-context (&body body)
+  `(let* ((*bilerpers* (list)))
+     ,@body))
 
 (defmacro lets-for-triangle (&body forms)
   (labels ((let-for-triangle (dst-prefix src-prefix base-form)
@@ -42,8 +45,10 @@
                    (apply #'let-for-triangle x))
                forms)))
 
-(defmacro lets-for-lerp-steps-1 (&body forms)
+(defun lets-for-lerp-steps-1 (&rest forms)
   (labels ((/transform (sym-base v0 v1 v2)
+             ;(format t "*** NEW BILERPERS ~s~%" *bilerpers*)
+             (push sym-base *bilerpers*)
              (sublis
                `(($-top . ,(intern (format nil "~a-TOP" sym-base)))
                  ($-mid . ,(intern (format nil "~a-MID" sym-base)))
@@ -64,10 +69,37 @@
                  ($-maj-step (floor (/ (* (- $-bot $-top) #x1000)
                                      (max 1 (- y-bot y-top)))))
                  ))))
-    `',(mapcan #'(lambda (x)
-                   (apply #'/transform x))
-               forms)))
+    (mapcan #'(lambda (x)
+                (apply #'/transform x))
+            forms)))
 
+(defun insert/increment-bilerpers-x ()
+  ;(format t "*** BILERPERS ~s~%" *bilerpers*)
+  (mapcan
+    #'(lambda (sym)
+        (list
+          (list
+            'incf
+            (intern (format nil "~a-POS" sym))
+            (intern (format nil "~a-LOCSTEP" sym)))))
+    (remove-if
+      #'(lambda (x) (eql x 'x))
+      *bilerpers*)))
+
+(defun insert/increment-bilerpers-y ()
+  ;(format t "*** BILERPERS ~s~%" *bilerpers*)
+  (mapcan
+    #'(lambda (sym)
+        (list
+          (list
+            'incf
+            (intern (format nil "~a-L-POS" sym))
+            (intern (format nil "~a-L-STEP" sym)))
+          (list
+            'incf
+            (intern (format nil "~a-R-POS" sym))
+            (intern (format nil "~a-R-STEP" sym)))))
+    *bilerpers*))
 
 (defclass psgpu ()
   ((vram
@@ -192,649 +224,632 @@
 
 
 (defun build-gp0-case (index)
-  (labels ((/build-geom-body (index)
-             (assert (>= index #x20))
-             (assert (<= index #x7F))
-             (ecase (logand index #xE0)
-               ((#x20) (/draw-poly index))
-               ((#x40) (/draw-line index))
-               ((#x60) (/draw-rect index))))
+  (with-render-context
+    (labels ((/build-geom-body (index)
+               (assert (>= index #x20))
+               (assert (<= index #x7F))
+               (ecase (logand index #xE0)
+                 ((#x20) (/draw-poly index))
+                 ((#x40) (/draw-line index))
+                 ((#x60) (/draw-rect index))))
 
-           (/draw-poly (index)
-             (let* ((*bilerpers*      (list))
-                    (raw-textured     (= #x05 (logand index #x05)))
-                    (semi-transparent (/= 0 (logand index #x02)))
-                    (texture-mapped   (/= 0 (logand index #x04)))
-                    (is-quad          (/= 0 (logand index #x08)))
-                    (gouraud-shaded   (/= 0 (logand index #x10)))
-                    (points           3)
-                    (words-for-color  (if gouraud-shaded points 1))
-                    (args-per-point   (if texture-mapped 2 1))
-                    (words-needed     (+ (* points args-per-point)
-                                         words-for-color))
-                    (color-offset     0)
-                    (vertex-offset    1)
-                    (texcoord-offset  2)
-                    (color-step       (if gouraud-shaded
-                                        (+ args-per-point 1)
-                                        0))
-                    (vertex-step      (+ args-per-point
-                                         (if gouraud-shaded 1 0)))
-                    (texcoord-step    (+ args-per-point
-                                         (if gouraud-shaded 1 0)))
-                    )
-               (declare (ignore semi-transparent raw-textured))
-               (labels
-                 ((/draw-poly-half-flat (upper-y lower-y)
-                    `((dotimes (yi (- ,lower-y ,upper-y))
-                        (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
-                               (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
-                               (y-pixel (+ ,upper-y yi)))
-                          (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
-                          (assert (and (<= 0 y-pixel 511)
-                                       (<= clamp-y1 y-pixel clamp-y2)))
-                          (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
-                            (declare (type fixnum ibase))
-                            (dotimes (xi (- x-r-pixel x-l-pixel))
-                              (setf (aref vram (+ ibase xi)) cd0p))))
-                        (incf x-l-pos x-l-step)
-                        (incf x-r-pos x-r-step))))
+             (/draw-poly (index)
+               (let* ((raw-textured     (= #x05 (logand index #x05)))
+                      (semi-transparent (/= 0 (logand index #x02)))
+                      (texture-mapped   (/= 0 (logand index #x04)))
+                      (is-quad          (/= 0 (logand index #x08)))
+                      (gouraud-shaded   (/= 0 (logand index #x10)))
+                      (points           3)
+                      (words-for-color  (if gouraud-shaded points 1))
+                      (args-per-point   (if texture-mapped 2 1))
+                      (words-needed     (+ (* points args-per-point)
+                                           words-for-color))
+                      (color-offset     0)
+                      (vertex-offset    1)
+                      (texcoord-offset  2)
+                      (color-step       (if gouraud-shaded
+                                          (+ args-per-point 1)
+                                          0))
+                      (vertex-step      (+ args-per-point
+                                           (if gouraud-shaded 1 0)))
+                      (texcoord-step    (+ args-per-point
+                                           (if gouraud-shaded 1 0)))
+                      )
+                 (declare (ignore semi-transparent raw-textured))
+                 (labels
+                   ((/draw-poly-half-flat (upper-y lower-y)
+                      `((dotimes (yi (- ,lower-y ,upper-y))
+                          (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
+                                 (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
+                                 (y-pixel (+ ,upper-y yi)))
+                            (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
+                            (assert (and (<= 0 y-pixel 511)
+                                         (<= clamp-y1 y-pixel clamp-y2)))
+                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
+                              (declare (type fixnum ibase))
+                              (dotimes (xi (- x-r-pixel x-l-pixel))
+                                (setf (aref vram (+ ibase xi)) cd0p))))
+                          (incf x-l-pos x-l-step)
+                          (incf x-r-pos x-r-step))))
 
-                  (/draw-poly-half-rawtex (upper-y lower-y)
-                    `((dotimes (yi (- ,lower-y ,upper-y))
-                        (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
-                               (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
-                               (s-pos s-l-pos)
-                               (t-pos t-l-pos)
-                               (s-span (- s-r-pos s-l-pos))
-                               (t-span (- t-r-pos t-l-pos))
-                               (s-locstep (floor (/ s-span
-                                                    (max 1 (- x-r-pixel x-l-pixel)))))
-                               (t-locstep (floor (/ t-span
-                                                    (max 1 (- x-r-pixel x-l-pixel)))))
-                               (y-pixel (+ ,upper-y yi)))
-                          (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
-                          (assert (and (<= 0 y-pixel 511)
-                                       (<= clamp-y1 y-pixel clamp-y2)))
-                          (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
-                            (declare (type fixnum ibase))
-                            (dotimes (xi (- x-r-pixel x-l-pixel))
-                              (let* ((tx (ash s-pos -12))
-                                     (ty (ash t-pos -12))
-                                     (pixelpos
-                                       (ecase texbpp
-                                         ((4)
-                                            (+ clutref
-                                               (logand #x000F
-                                                 (ash (aref vram
-                                                        ;; FIXME: range is busted
-                                                        (logand
-                                                          #x7FFFF
-                                                          (+ texref
-                                                             (ash tx -2)
-                                                             (* ty 1024))))
-                                                      (* -4 (logand #x3 tx))))))
-                                         ((8)
-                                            (+ clutref
-                                               (logand #x00FF
-                                                 (ash (aref vram
-                                                        (logand
-                                                          #x7FFFF
-                                                          (+ texref
-                                                             (ash tx -1)
-                                                             (* ty 1024))))
-                                                      (* -8 (logand #x1 tx))))))
-                                         ((15) (+ tx (* ty 1024)))))
-                                     (pixeldata (aref vram
-                                                      (logand #x7FFFF pixelpos))))
-                                (when (/= 0 pixeldata)
-                                  (setf (aref vram (+ ibase xi)) pixeldata))
-                                (incf s-pos s-locstep)
-                                (incf t-pos t-locstep))))
-                        (incf x-l-pos x-l-step)
-                        (incf x-r-pos x-r-step)
-                        (incf s-l-pos s-l-step)
-                        (incf s-r-pos s-r-step)
-                        (incf t-l-pos t-l-step)
-                        (incf t-r-pos t-r-step)
-                        ))))
+                    (/draw-poly-half-rawtex (upper-y lower-y)
+                      `((dotimes (yi (- ,lower-y ,upper-y))
+                          (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
+                                 (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
+                                 (s-pos s-l-pos)
+                                 (t-pos t-l-pos)
+                                 (s-span (- s-r-pos s-l-pos))
+                                 (t-span (- t-r-pos t-l-pos))
+                                 (s-locstep (floor (/ s-span
+                                                      (max 1 (- x-r-pixel x-l-pixel)))))
+                                 (t-locstep (floor (/ t-span
+                                                      (max 1 (- x-r-pixel x-l-pixel)))))
+                                 (y-pixel (+ ,upper-y yi)))
+                            (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
+                            (assert (and (<= 0 y-pixel 511)
+                                         (<= clamp-y1 y-pixel clamp-y2)))
+                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
+                              (declare (type fixnum ibase))
+                              (dotimes (xi (- x-r-pixel x-l-pixel))
+                                (let* ((tx (ash s-pos -12))
+                                       (ty (ash t-pos -12))
+                                       (pixelpos
+                                         (ecase texbpp
+                                           ((4)
+                                              (+ clutref
+                                                 (logand #x000F
+                                                   (ash (aref vram
+                                                          ;; FIXME: range is busted
+                                                          (logand
+                                                            #x7FFFF
+                                                            (+ texref
+                                                               (ash tx -2)
+                                                               (* ty 1024))))
+                                                        (* -4 (logand #x3 tx))))))
+                                           ((8)
+                                              (+ clutref
+                                                 (logand #x00FF
+                                                   (ash (aref vram
+                                                          (logand
+                                                            #x7FFFF
+                                                            (+ texref
+                                                               (ash tx -1)
+                                                               (* ty 1024))))
+                                                        (* -8 (logand #x1 tx))))))
+                                           ((15) (+ tx (* ty 1024)))))
+                                       (pixeldata (aref vram
+                                                        (logand #x7FFFF pixelpos))))
+                                  (when (/= 0 pixeldata)
+                                    (setf (aref vram (+ ibase xi)) pixeldata))
+                                  (incf s-pos s-locstep)
+                                  (incf t-pos t-locstep)
+                                  ;,@(insert/increment-bilerpers-x)
+                                  )))
+                          ,@(insert/increment-bilerpers-y)
+                          ))))
 
-                  (/draw-poly-half-gouraud (upper-y lower-y)
-                    `((dotimes (yi (- ,lower-y ,upper-y))
-                        (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
-                               (x-r-pixel (min 1023 clamp-x2 (ash x-r-pos -12)))
-                               (y-pixel (+ ,upper-y yi))
-                               ;; TODO: get a constant horizontal delta
-                               (cr-pos cr-l-pos)
-                               (cg-pos cg-l-pos)
-                               (cb-pos cb-l-pos)
-                               (cr-span (- cr-r-pos cr-l-pos))
-                               (cg-span (- cg-r-pos cg-l-pos))
-                               (cb-span (- cb-r-pos cb-l-pos))
-                               (cr-locstep (floor (/ cr-span
-                                                     (max 1 (- x-r-pixel x-l-pixel)))))
-                               (cg-locstep (floor (/ cg-span
-                                                     (max 1 (- x-r-pixel x-l-pixel)))))
-                               (cb-locstep (floor (/ cb-span
-                                                     (max 1 (- x-r-pixel x-l-pixel)))))
-                               )
-                          (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
-                          (declare (type fixnum cr-pos cg-pos cb-pos))
-                          (declare (type fixnum cr-span cg-span cb-span))
-                          (declare (type fixnum cr-locstep cg-locstep cb-locstep))
-                          (assert (and (<= 0 y-pixel 511)
-                                       (<= clamp-y1 y-pixel clamp-y2)))
-                          (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
+                    (/draw-poly-half-gouraud (upper-y lower-y)
+                      `((dotimes (yi (- ,lower-y ,upper-y))
+                          (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
+                                 (x-r-pixel (min 1023 clamp-x2 (ash x-r-pos -12)))
+                                 (y-pixel (+ ,upper-y yi))
+                                 ;; TODO: get a constant horizontal delta
+                                 (cr-pos cr-l-pos)
+                                 (cg-pos cg-l-pos)
+                                 (cb-pos cb-l-pos)
+                                 (cr-span (- cr-r-pos cr-l-pos))
+                                 (cg-span (- cg-r-pos cg-l-pos))
+                                 (cb-span (- cb-r-pos cb-l-pos))
+                                 (cr-locstep (floor (/ cr-span
+                                                       (max 1 (- x-r-pixel x-l-pixel)))))
+                                 (cg-locstep (floor (/ cg-span
+                                                       (max 1 (- x-r-pixel x-l-pixel)))))
+                                 (cb-locstep (floor (/ cb-span
+                                                       (max 1 (- x-r-pixel x-l-pixel)))))
                                  )
-                            (declare (type fixnum ibase))
-                            (dotimes (xi (- x-r-pixel x-l-pixel))
-                              ;(let* ((cd0p (logior (ash (logand #xF8
-                              ;                                  (max 0 (min 255
-                              ;                                              (ash cr-pos -12)))) -3)
-                              ;                     (ash (logand #xF8
-                              ;                                  (max 0 (min 255
-                              ;                                              (ash cg-pos -12))))  2)
-                              ;                     (ash (logand #xF8
-                              ;                                  (max 0 (min 255
-                              ;                                              (ash cb-pos -12))))  7))))
-                              ;
-
-                              ;; may potentially artifact
-                              ;(let* ((cd0p (logior (ash (logand #xF8 (ash cr-pos -12)) -3)
-                              ;                     (ash (logand #xF8 (ash cg-pos -12))  2)
-                              ;                     (ash (logand #xF8 (ash cb-pos -12))  7))))
-                              (let* ((cd0p (logior (ash (logand #xF8 (ash (+ cr-pos (* xi cr-locstep))
-                                                                          -12)) -3)
-                                                   (ash (logand #xF8 (ash (+ cg-pos (* xi cg-locstep))
-                                                                          -12))  2)
-                                                   (ash (logand #xF8 (ash (+ cb-pos (* xi cb-locstep))
-                                                                          -12))  7))))
+                            (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
+                            (declare (type fixnum cr-pos cg-pos cb-pos))
+                            (declare (type fixnum cr-span cg-span cb-span))
+                            (declare (type fixnum cr-locstep cg-locstep cb-locstep))
+                            (assert (and (<= 0 y-pixel 511)
+                                         (<= clamp-y1 y-pixel clamp-y2)))
+                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
+                                   )
+                              (declare (type fixnum ibase))
+                              (dotimes (xi (- x-r-pixel x-l-pixel))
+                                ;(let* ((cd0p (logior (ash (logand #xF8
+                                ;                                  (max 0 (min 255
+                                ;                                              (ash cr-pos -12)))) -3)
+                                ;                     (ash (logand #xF8
+                                ;                                  (max 0 (min 255
+                                ;                                              (ash cg-pos -12))))  2)
+                                ;                     (ash (logand #xF8
+                                ;                                  (max 0 (min 255
+                                ;                                              (ash cb-pos -12))))  7))))
                                 ;
-                                (declare (type fixnum cd0p))
-                                ;(incf cr-pos cr-locstep)
-                                ;(incf cg-pos cg-locstep)
-                                ;(incf cb-pos cb-locstep)
-                                (setf (aref vram (+ ibase xi)) cd0p)))))
-                        (incf x-l-pos x-l-step)
-                        (incf x-r-pos x-r-step)
-                        (incf cr-l-pos cr-l-step)
-                        (incf cr-r-pos cr-r-step)
-                        (incf cg-l-pos cg-l-step)
-                        (incf cg-r-pos cg-r-step)
-                        (incf cb-l-pos cb-l-step)
-                        (incf cb-r-pos cb-r-step)
-                        )))
 
-                  (/draw-poly-half (upper-y lower-y)
-                    (cond
-                      (texture-mapped
-                        ;; TODO!
-                        (/draw-poly-half-rawtex  upper-y lower-y))
-                      (gouraud-shaded
-                        (/draw-poly-half-gouraud upper-y lower-y))
-                      (t
-                        (/draw-poly-half-flat    upper-y lower-y))))
-                  )
+                                ;; may potentially artifact
+                                (let* ((cd0p (logior (ash (logand #xF8 (ash cr-pos -12)) -3)
+                                                     (ash (logand #xF8 (ash cg-pos -12))  2)
+                                                     (ash (logand #xF8 (ash cb-pos -12))  7))))
+                                  ;
+                                  (declare (type fixnum cd0p))
+                                  (setf (aref vram (+ ibase xi)) cd0p)
+                                  ,@(insert/increment-bilerpers-x)
+                                  ))))
+                          ,@(insert/increment-bilerpers-y)
+                          )))
 
-                 ;;
+                    (/draw-poly-half (upper-y lower-y)
+                      (cond
+                        (texture-mapped
+                          ;; TODO!
+                          (/draw-poly-half-rawtex  upper-y lower-y))
+                        (gouraud-shaded
+                          (/draw-poly-half-gouraud upper-y lower-y))
+                        (t
+                          (/draw-poly-half-flat    upper-y lower-y))))
+                    )
 
+                   ;;
+
+                   `((when (< gp0-buffer-length ,words-needed)
+                       (return-from keep-gp0-buffer nil))
+                     (let* ((vd0 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 0))))
+                            (vd1 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 1))))
+                            (vd2 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 2))))
+                            ,@(lets-for-triangle
+                                (x vd (- (logand (+ $x #x0400) #x07FF) #x0400))
+                                (y vd (- (logand (+ (ash $x -16) #x0400) #x07FF) #x0400)))
+                            (cd0 (aref gp0-buffer ,(+ color-offset  (* color-step  0))))
+                            ,@(unless (or texture-mapped gouraud-shaded)
+                              `(
+                                (cd0p (color-24-to-15 cd0))))
+                            ,@(when gouraud-shaded
+                                `(
+                                  (cd1 (aref gp0-buffer ,(+ color-offset  (* color-step  1))))
+                                  (cd2 (aref gp0-buffer ,(+ color-offset  (* color-step  2))))
+                                  ,@(lets-for-triangle
+                                      (cr cd (logand #xFF (ash $x  -0)))
+                                      (cg cd (logand #xFF (ash $x  -8)))
+                                      (cb cd (logand #xFF (ash $x -16)))
+                                      )
+                                  ))
+                            ,@(when texture-mapped
+                                `((td0 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 0))))
+                                  (td1 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 1))))
+                                  (td2 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 2))))
+                                  ,@(lets-for-triangle
+                                      (s td (logand $x #x00FF))
+                                      (t td (logand (ash $x -8) #x00FF)))
+                                  ))
+                            ,@(when texture-mapped
+                                `((texpage (ash td1 -16))
+                                  (texbpp
+                                    (ecase (logand #x3 (ash texpage -7))
+                                      ((0)  4)
+                                      ((1)  8)
+                                      ((2 3) 15)))  ; FIXME this seems to be wrong, why do I get this?
+                                  (clutref
+                                    (convert-clut-pointer
+                                      (ash td0 -16)))
+                                  (texref
+                                    (convert-texpage-pointer
+                                      texpage))))
+                            )
+                       (declare (ignorable cd0))
+                       (declare (type fixnum x0 y0 x1 y1 x2 y2))
+
+                       ;; TODO: cancel oversized polys
+
+                       (with-slots (clamp-x1 clamp-y1
+                                    clamp-x2 clamp-y2
+                                    offs-x offs-y) this
+                         (incf x0 offs-x)
+                         (incf x1 offs-x)
+                         (incf x2 offs-x)
+                         (incf y0 offs-y)
+                         (incf y1 offs-y)
+                         (incf y2 offs-y)
+
+                         ;; TODO: actually clip instead of min/max
+                         (setf x0 (max clamp-x1 (min clamp-x2 x0)))
+                         (setf x1 (max clamp-x1 (min clamp-x2 x1)))
+                         (setf x2 (max clamp-x1 (min clamp-x2 x2)))
+                         (setf y0 (max clamp-y1 (min clamp-y2 y0)))
+                         (setf y1 (max clamp-y1 (min clamp-y2 y1)))
+                         (setf y2 (max clamp-y1 (min clamp-y2 y2)))
+
+                         ;; Order such that (<= y0 y1 y2)
+                         ;; Stoogesort is definitely worthwhile here
+                         (when (< y2 y1)
+                           (swap-pair x1 x2)
+                           ,@(when gouraud-shaded
+                               `((swap-pair cr1 cr2)
+                                 (swap-pair cg1 cg2)
+                                 (swap-pair cb1 cb2)
+                                 ))
+                           ,@(when texture-mapped
+                               `((swap-pair s1 s2)
+                                 (swap-pair t1 t2)))
+                           (swap-pair y1 y2)
+                           )
+                         (when (< y1 y0)
+                           (swap-pair x0 x1)
+                           ,@(when gouraud-shaded
+                               `((swap-pair cr0 cr1)
+                                 (swap-pair cg0 cg1)
+                                 (swap-pair cb0 cb1)
+                                 ))
+                           ,@(when texture-mapped
+                               `((swap-pair s0 s1)
+                                 (swap-pair t0 t1)))
+                           (swap-pair y0 y1)
+                           )
+                         (when (< y2 y1)
+                           (swap-pair x1 x2)
+                           ,@(when gouraud-shaded
+                               `((swap-pair cr1 cr2)
+                                 (swap-pair cg1 cg2)
+                                 (swap-pair cb1 cb2)
+                                 ))
+                           ,@(when texture-mapped
+                               `((swap-pair s1 s2)
+                                 (swap-pair t1 t2)))
+                           (swap-pair y1 y2)
+                           )
+
+                         (assert (<= y0 y1 y2))
+
+                         (let* ((y-top y0)
+                                (y-bot y2)
+                                (y-mid y1)
+                                ,@(lets-for-lerp-steps-1
+                                    '(x x0 x1 x2))
+
+                                ,@(when gouraud-shaded
+                                    `(,@(lets-for-lerp-steps-1
+                                          '(cr cr0 cr1 cr2)
+                                          '(cg cg0 cg1 cg2)
+                                          '(cb cb0 cb1 cb2)
+                                          )
+                                      ))
+
+                                ,@(when texture-mapped
+                                    `(,@(lets-for-lerp-steps-1
+                                          '(s s0 s1 s2)
+                                          '(t t0 t1 t2)
+                                          )
+                                      ))
+
+                                (left-major
+                                  (if (= y-top y-mid)
+                                    (> x-maj-step x-bot-step)
+                                    (< x-maj-step x-top-step)))
+                                (x-l-pos  (+ (ash x-top 12) #x0800))
+                                (x-r-pos  (+ (ash x-top 12) #x0800))
+                                (x-l-step (if left-major x-maj-step x-top-step))
+                                (x-r-step (if left-major x-top-step x-maj-step))
+                                ,@(when gouraud-shaded
+                                    `((cr-l-pos  (+ (ash cr-top 12) #x0800))
+                                      (cr-r-pos  (+ (ash cr-top 12) #x0800))
+                                      (cr-l-step (if left-major cr-maj-step cr-top-step))
+                                      (cr-r-step (if left-major cr-top-step cr-maj-step))
+                                      (cg-l-pos  (+ (ash cg-top 12) #x0800))
+                                      (cg-r-pos  (+ (ash cg-top 12) #x0800))
+                                      (cg-l-step (if left-major cg-maj-step cg-top-step))
+                                      (cg-r-step (if left-major cg-top-step cg-maj-step))
+                                      (cb-l-pos  (+ (ash cb-top 12) #x0800))
+                                      (cb-r-pos  (+ (ash cb-top 12) #x0800))
+                                      (cb-l-step (if left-major cb-maj-step cb-top-step))
+                                      (cb-r-step (if left-major cb-top-step cb-maj-step))
+                                      ))
+                                ,@(when texture-mapped
+                                    `((s-l-pos  (+ (ash s-top 12) #x0800))
+                                      (s-r-pos  (+ (ash s-top 12) #x0800))
+                                      (s-l-step (if left-major s-maj-step s-top-step))
+                                      (s-r-step (if left-major s-top-step s-maj-step))
+                                      (t-l-pos  (+ (ash t-top 12) #x0800))
+                                      (t-r-pos  (+ (ash t-top 12) #x0800))
+                                      (t-l-step (if left-major t-maj-step t-top-step))
+                                      (t-r-step (if left-major t-top-step t-maj-step))
+                                      ))
+                                )
+                           (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot))
+                           (declare (type fixnum x-top-step x-bot-step x-maj-step))
+                           (declare (type fixnum x-l-pos x-r-pos x-l-step x-r-step))
+                           ,@(when texture-mapped
+                               `((declare (type fixnum s-l-pos s-r-pos s-l-step s-r-step))
+                                 (declare (type fixnum t-l-pos t-r-pos t-l-step t-r-step))
+                                 ))
+
+                           ;; Do top
+                           ,@(/draw-poly-half 'y-top 'y-mid)
+
+                           ;; Snap minor
+                           (if left-major
+                             (progn
+                               (setf x-r-pos  (+ (ash x-mid 12) #x0800))
+                               (setf x-r-step x-bot-step)
+                               ,@(when gouraud-shaded
+                                   `(;
+                                     (setf cr-r-pos  (+ (ash cr-mid 12) #x0800))
+                                     (setf cr-r-step cr-bot-step)
+                                     (setf cg-r-pos  (+ (ash cg-mid 12) #x0800))
+                                     (setf cg-r-step cg-bot-step)
+                                     (setf cb-r-pos  (+ (ash cb-mid 12) #x0800))
+                                     (setf cb-r-step cb-bot-step)
+                                     ))
+                               ,@(when texture-mapped
+                                   `(;
+                                     (setf s-r-pos  (+ (ash s-mid 12) #x0800))
+                                     (setf s-r-step s-bot-step)
+                                     (setf t-r-pos  (+ (ash t-mid 12) #x0800))
+                                     (setf t-r-step t-bot-step)
+                                     ))
+                               )
+                             (progn
+                               (setf x-l-pos  (+ (ash x-mid 12) #x0800))
+                               (setf x-l-step x-bot-step)
+                               ,@(when gouraud-shaded
+                                   `(;
+                                     (setf cr-l-pos  (+ (ash cr-mid 12) #x0800))
+                                     (setf cr-l-step cr-bot-step)
+                                     (setf cg-l-pos  (+ (ash cg-mid 12) #x0800))
+                                     (setf cg-l-step cg-bot-step)
+                                     (setf cb-l-pos  (+ (ash cb-mid 12) #x0800))
+                                     (setf cb-l-step cb-bot-step)
+                                     ))
+                               ,@(when texture-mapped
+                                   `(;
+                                     (setf s-l-pos  (+ (ash s-mid 12) #x0800))
+                                     (setf s-l-step s-bot-step)
+                                     (setf t-l-pos  (+ (ash t-mid 12) #x0800))
+                                     (setf t-l-step t-bot-step)
+                                     ))
+                               ))
+
+                           ;; Do bottom
+                           ,@(/draw-poly-half 'y-mid 'y-bot)
+
+                           )))
+
+                     ;; Convert quads to tris
+
+                     ,@(when (and is-quad texture-mapped)
+                         `(;; Copy CLUT, Texpage upwards
+                           (setf (aref gp0-buffer ,(+ (* texcoord-step 2)
+                                                      texcoord-offset))
+                                 (logior (logand (aref gp0-buffer ,(+ (* texcoord-step 1)
+                                                                      texcoord-offset))
+                                                       #xFFFF0000)
+                                         (logand (aref gp0-buffer ,(+ (* texcoord-step 2)
+                                                                      texcoord-offset))
+                                                       #x0000FFFF)))
+
+                           (setf (aref gp0-buffer ,(+ (* texcoord-step 1)
+                                                      texcoord-offset))
+                                 (logior (logand (aref gp0-buffer ,(+ (* texcoord-step 0)
+                                                                      texcoord-offset))
+                                                       #xFFFF0000)
+                                         (logand (aref gp0-buffer ,(+ (* texcoord-step 1)
+                                                                      texcoord-offset))
+                                                       #x0000FFFF)))
+                           ))
+
+                     ,@(when is-quad
+                         (if gouraud-shaded
+                           ;; Gouraud version
+                           `(;; Copy and set command
+                             (setf (aref gp0-buffer ,color-step)
+                                   (logior (logand (aref gp0-buffer 0) #xF7000000)
+                                           (logand (aref gp0-buffer ,color-step) #x00FFFFFF)))
+
+                             ;; Overwrite
+                             (dotimes (i (- gp0-buffer-length ,color-step))
+                               (setf (aref gp0-buffer i)
+                                     (aref gp0-buffer (+ i ,color-step))))
+
+                             ;; Return
+                             (decf gp0-buffer-length ,color-step)
+                             (return-from keep-gp0-buffer nil))
+
+                           ;; Flat version
+                           `(;; Set command
+                             (setf (aref gp0-buffer 0)
+                                   (logand (aref gp0-buffer 0) #xF7FFFFFF))
+
+                             ;; Overwrite
+                             (dotimes (i (- gp0-buffer-length ,vertex-step 1))
+                               (setf (aref gp0-buffer (+ 1 i))
+                                     (aref gp0-buffer (+ 1 i ,vertex-step))))
+
+                             ;; Return
+                             (decf gp0-buffer-length ,vertex-step)
+                             (return-from keep-gp0-buffer nil))))
+                     ))))
+
+             (/draw-line (index)
+               (let* ((semi-transparent (/= 0 (logand index #x02)))
+                      (poly-line        (/= 0 (logand index #x08)))
+                      (gouraud-shaded   (/= 0 (logand index #x10)))
+                      (words-for-color  (if gouraud-shaded 2 1))
+                      (words-needed     (+ 2 words-for-color))
+                      (color-offset     0)
+                      (vertex-offset    1)
+                      (color-step       (if gouraud-shaded 2 0))
+                      (vertex-step      (if gouraud-shaded 2 1))
+                      )
+                 (declare (ignore semi-transparent))
+                 `(;; TODO: handle poly-lines sanely
+                   ,@(when poly-line
+                     `((error (format nil "TODO: ~2,'8X polyline" ,index))))
+                   (when (< gp0-buffer-length ,words-needed)
+                     (return-from keep-gp0-buffer nil))
+                   ;(format t "line ~2,'8X wcount=~d~%" ,index ,words-needed)
+                   (let* ((vi0 ,(+ vertex-offset (* vertex-step 0)))
+                          (vi1 ,(+ vertex-offset (* vertex-step 1)))
+                          (vd0 (aref gp0-buffer vi0))
+                          (vd1 (aref gp0-buffer vi1))
+                          (ci0 ,(+ color-offset  (* color-step  0)))
+                          (cd0 (aref gp0-buffer ci0))
+                          (cd0p (color-24-to-15 cd0))
+                          ,@(if (and nil gouraud-shaded)
+                              `((ci1 ,(+ color-offset  (* color-step  1)))
+                                (cd1 (aref gp0-buffer ci1))
+                                (cd1p (color-24-to-15 cd1))))
+                          (x0  (- (logand (+ vd0 #x0400) #x07FF) #x0400))
+                          (y0  (- (logand (+ (ash vd0 -16) #x0400) #x07FF) #x0400))
+                          (x1  (- (logand (+ vd1 #x0400) #x07FF) #x0400))
+                          (y1  (- (logand (+ (ash vd1 -16) #x0400) #x07FF) #x0400))
+                          (dx (- x1 x0))
+                          (dy (- y1 y0))
+                          )
+
+                     ;; TODO: gouraud shading
+                     ;; TODO: find a reasonably accurate algorithm for xctr/yctr
+                     (if (> (abs dx) (abs dy))
+                       ;; horizontal-major
+                       (let* ((xbeg  (if (< x0 x1) x0 x1))
+                              (xend  (if (< x0 x1) x1 x0))
+                              (ybeg  (if (< x0 x1) y0 y1))
+                              (yend  (if (< x0 x1) y1 y0))
+                              (xlen  (- xend xbeg))
+                              (ylen  (- yend ybeg))
+                              (xlena (abs xlen))
+                              (ylena (abs ylen))
+                              (ystep (if (< yend ybeg) -1 1))
+                              (yctr  0)
+                              (y-mid  ybeg))
+                         (declare (type fixnum xbeg xend ybeg yend xlen ylen xlena ylena ystep yctr y-mid))
+                         (dotimes (xi (+ xlen 1))
+                           (putpixel this (+ xbeg xi) y-mid cd0p)
+                           (decf yctr ylena)
+                           (when (< yctr 0)
+                             (incf yctr xlena)
+                             (incf y-mid ystep)))))
+
+                       ;; vertical-major
+                       (let* ((xbeg  (if (< y0 y1) x0 x1))
+                              (xend  (if (< y0 y1) x1 x0))
+                              (ybeg  (if (< y0 y1) y0 y1))
+                              (yend  (if (< y0 y1) y1 y0))
+                              (xlen  (- xend xbeg))
+                              (ylen  (- yend ybeg))
+                              (xlena (abs xlen))
+                              (ylena (abs ylen))
+                              (xstep (if (< xend xbeg) -1 1))
+                              (xctr  0)
+                              (x-mid  xbeg))
+                         (declare (type fixnum ybeg yend xbeg xend ylen xlen ylena xlena xstep xctr x-mid))
+                         (dotimes (yi (+ ylen 1))
+                           (putpixel this x-mid (+ ybeg yi) cd0p)
+                           (decf xctr xlena)
+                           (when (< xctr 0)
+                             (incf xctr ylena)
+                             (incf x-mid xstep)))))
+                   )))
+
+             (/draw-rect (index)
+               (let* ((raw-textured     (= #x05 (logand index #x05)))
+                      (semi-transparent (/= 0 (logand index #x02)))
+                      (texture-mapped   (/= 0 (logand index #x04)))
+                      (rect-size-enum   (logand #x03 (ash index -3)))
+                      (variably-sized   (= rect-size-enum 0))
+                      (words-needed     (+ 2
+                                           (if texture-mapped 1 0)
+                                           (if variably-sized 1 0)))
+                      (color-offset     0)
+                      (vertex-offset    1)
+                      (texcoord-offset  2)
+                      (size-offset      (if texture-mapped 3 2))
+                      )
+                 (declare (ignore semi-transparent raw-textured))
                  `((when (< gp0-buffer-length ,words-needed)
                      (return-from keep-gp0-buffer nil))
-                   (let* ((vd0 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 0))))
-                          (vd1 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 1))))
-                          (vd2 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 2))))
-                          ,@(lets-for-triangle
-                              (x vd (- (logand (+ $x #x0400) #x07FF) #x0400))
-                              (y vd (- (logand (+ (ash $x -16) #x0400) #x07FF) #x0400)))
-                          (cd0 (aref gp0-buffer ,(+ color-offset  (* color-step  0))))
-                          ,@(unless (or texture-mapped gouraud-shaded)
-                            `(
-                              (cd0p (color-24-to-15 cd0))))
-                          ,@(when gouraud-shaded
-                              `(
-                                (cd1 (aref gp0-buffer ,(+ color-offset  (* color-step  1))))
-                                (cd2 (aref gp0-buffer ,(+ color-offset  (* color-step  2))))
-                                ,@(lets-for-triangle
-                                    (cr cd (logand #xFF (ash $x  -0)))
-                                    (cg cd (logand #xFF (ash $x  -8)))
-                                    (cb cd (logand #xFF (ash $x -16)))
-                                    )
-                                ))
-                          ,@(when texture-mapped
-                              `((td0 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 0))))
-                                (td1 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 1))))
-                                (td2 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 2))))
-                                ,@(lets-for-triangle
-                                    (s td (logand $x #x00FF))
-                                    (t td (logand (ash $x -8) #x00FF)))
-                                ))
-                          ,@(when texture-mapped
-                              `((texpage (ash td1 -16))
-                                (texbpp
-                                  (ecase (logand #x3 (ash texpage -7))
-                                    ((0)  4)
-                                    ((1)  8)
-                                    ((2 3) 15)))  ; FIXME this seems to be wrong, why do I get this?
-                                (clutref
-                                  (convert-clut-pointer
-                                    (ash td0 -16)))
-                                (texref
-                                  (convert-texpage-pointer
-                                    texpage))))
-                          )
-                     (declare (ignorable cd0))
-                     (declare (type fixnum x0 y0 x1 y1 x2 y2))
-
-                     ;; TODO: cancel oversized polys
-
-                     (with-slots (clamp-x1 clamp-y1
-                                  clamp-x2 clamp-y2
-                                  offs-x offs-y) this
-                       (incf x0 offs-x)
-                       (incf x1 offs-x)
-                       (incf x2 offs-x)
-                       (incf y0 offs-y)
-                       (incf y1 offs-y)
-                       (incf y2 offs-y)
-
-                       ;; TODO: actually clip instead of min/max
-                       (setf x0 (max clamp-x1 (min clamp-x2 x0)))
-                       (setf x1 (max clamp-x1 (min clamp-x2 x1)))
-                       (setf x2 (max clamp-x1 (min clamp-x2 x2)))
-                       (setf y0 (max clamp-y1 (min clamp-y2 y0)))
-                       (setf y1 (max clamp-y1 (min clamp-y2 y1)))
-                       (setf y2 (max clamp-y1 (min clamp-y2 y2)))
-
-                       ;; Order such that (<= y0 y1 y2)
-                       ;; Stoogesort is definitely worthwhile here
-                       (when (< y2 y1)
-                         (swap-pair x1 x2)
-                         ,@(when gouraud-shaded
-                             `((swap-pair cr1 cr2)
-                               (swap-pair cg1 cg2)
-                               (swap-pair cb1 cb2)
-                               ))
-                         ,@(when texture-mapped
-                             `((swap-pair s1 s2)
-                               (swap-pair t1 t2)))
-                         (swap-pair y1 y2)
-                         )
-                       (when (< y1 y0)
-                         (swap-pair x0 x1)
-                         ,@(when gouraud-shaded
-                             `((swap-pair cr0 cr1)
-                               (swap-pair cg0 cg1)
-                               (swap-pair cb0 cb1)
-                               ))
-                         ,@(when texture-mapped
-                             `((swap-pair s0 s1)
-                               (swap-pair t0 t1)))
-                         (swap-pair y0 y1)
-                         )
-                       (when (< y2 y1)
-                         (swap-pair x1 x2)
-                         ,@(when gouraud-shaded
-                             `((swap-pair cr1 cr2)
-                               (swap-pair cg1 cg2)
-                               (swap-pair cb1 cb2)
-                               ))
-                         ,@(when texture-mapped
-                             `((swap-pair s1 s2)
-                               (swap-pair t1 t2)))
-                         (swap-pair y1 y2)
-                         )
-
-                       (assert (<= y0 y1 y2))
-
-                       (let* ((y-top y0)
-                              (y-bot y2)
-                              (y-mid y1)
-                              ,@(lets-for-lerp-steps-1
-                                  (x x0 x1 x2))
-
-                              ,@(when gouraud-shaded
-                                  `(,@(lets-for-lerp-steps-1
-                                        (cr cr0 cr1 cr2)
-                                        (cg cg0 cg1 cg2)
-                                        (cb cb0 cb1 cb2)
-                                        )
-                                    ))
-
-                              ,@(when texture-mapped
-                                  `(,@(lets-for-lerp-steps-1
-                                        (s s0 s1 s2)
-                                        (t t0 t1 t2)
-                                        )
-                                    ))
-
-                              (left-major
-                                (if (= y-top y-mid)
-                                  (> x-maj-step x-bot-step)
-                                  (< x-maj-step x-top-step)))
-                              (x-l-pos  (+ (ash x-top 12) #x0800))
-                              (x-r-pos  (+ (ash x-top 12) #x0800))
-                              (x-l-step (if left-major x-maj-step x-top-step))
-                              (x-r-step (if left-major x-top-step x-maj-step))
-                              ,@(when gouraud-shaded
-                                  `((cr-l-pos  (+ (ash cr-top 12) #x0800))
-                                    (cr-r-pos  (+ (ash cr-top 12) #x0800))
-                                    (cr-l-step (if left-major cr-maj-step cr-top-step))
-                                    (cr-r-step (if left-major cr-top-step cr-maj-step))
-                                    (cg-l-pos  (+ (ash cg-top 12) #x0800))
-                                    (cg-r-pos  (+ (ash cg-top 12) #x0800))
-                                    (cg-l-step (if left-major cg-maj-step cg-top-step))
-                                    (cg-r-step (if left-major cg-top-step cg-maj-step))
-                                    (cb-l-pos  (+ (ash cb-top 12) #x0800))
-                                    (cb-r-pos  (+ (ash cb-top 12) #x0800))
-                                    (cb-l-step (if left-major cb-maj-step cb-top-step))
-                                    (cb-r-step (if left-major cb-top-step cb-maj-step))
-                                    ))
-                              ,@(when texture-mapped
-                                  `((s-l-pos  (+ (ash s-top 12) #x0800))
-                                    (s-r-pos  (+ (ash s-top 12) #x0800))
-                                    (s-l-step (if left-major s-maj-step s-top-step))
-                                    (s-r-step (if left-major s-top-step s-maj-step))
-                                    (t-l-pos  (+ (ash t-top 12) #x0800))
-                                    (t-r-pos  (+ (ash t-top 12) #x0800))
-                                    (t-l-step (if left-major t-maj-step t-top-step))
-                                    (t-r-step (if left-major t-top-step t-maj-step))
-                                    ))
-                              )
-                         (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot))
-                         (declare (type fixnum x-top-step x-bot-step x-maj-step))
-                         (declare (type fixnum x-l-pos x-r-pos x-l-step x-r-step))
-                         ,@(when texture-mapped
-                             `((declare (type fixnum s-l-pos s-r-pos s-l-step s-r-step))
-                               (declare (type fixnum t-l-pos t-r-pos t-l-step t-r-step))
-                               ))
-
-                         ;; Do top
-                         ,@(/draw-poly-half 'y-top 'y-mid)
-
-                         ;; Snap minor
-                         (if left-major
-                           (progn
-                             (setf x-r-pos  (+ (ash x-mid 12) #x0800))
-                             (setf x-r-step x-bot-step)
-                             ,@(when gouraud-shaded
-                                 `(;
-                                   (setf cr-r-pos  (+ (ash cr-mid 12) #x0800))
-                                   (setf cr-r-step cr-bot-step)
-                                   (setf cg-r-pos  (+ (ash cg-mid 12) #x0800))
-                                   (setf cg-r-step cg-bot-step)
-                                   (setf cb-r-pos  (+ (ash cb-mid 12) #x0800))
-                                   (setf cb-r-step cb-bot-step)
-                                   ))
-                             ,@(when texture-mapped
-                                 `(;
-                                   (setf s-r-pos  (+ (ash s-mid 12) #x0800))
-                                   (setf s-r-step s-bot-step)
-                                   (setf t-r-pos  (+ (ash t-mid 12) #x0800))
-                                   (setf t-r-step t-bot-step)
-                                   ))
-                             )
-                           (progn
-                             (setf x-l-pos  (+ (ash x-mid 12) #x0800))
-                             (setf x-l-step x-bot-step)
-                             ,@(when gouraud-shaded
-                                 `(;
-                                   (setf cr-l-pos  (+ (ash cr-mid 12) #x0800))
-                                   (setf cr-l-step cr-bot-step)
-                                   (setf cg-l-pos  (+ (ash cg-mid 12) #x0800))
-                                   (setf cg-l-step cg-bot-step)
-                                   (setf cb-l-pos  (+ (ash cb-mid 12) #x0800))
-                                   (setf cb-l-step cb-bot-step)
-                                   ))
-                             ,@(when texture-mapped
-                                 `(;
-                                   (setf s-l-pos  (+ (ash s-mid 12) #x0800))
-                                   (setf s-l-step s-bot-step)
-                                   (setf t-l-pos  (+ (ash t-mid 12) #x0800))
-                                   (setf t-l-step t-bot-step)
-                                   ))
-                             ))
-
-                         ;; Do bottom
-                         ,@(/draw-poly-half 'y-mid 'y-bot)
-
-                         )))
-
-                   ;; Convert quads to tris
-
-                   ,@(when (and is-quad texture-mapped)
-                       `(;; Copy CLUT, Texpage upwards
-                         (setf (aref gp0-buffer ,(+ (* texcoord-step 2)
-                                                    texcoord-offset))
-                               (logior (logand (aref gp0-buffer ,(+ (* texcoord-step 1)
-                                                                    texcoord-offset))
-                                                     #xFFFF0000)
-                                       (logand (aref gp0-buffer ,(+ (* texcoord-step 2)
-                                                                    texcoord-offset))
-                                                     #x0000FFFF)))
-
-                         (setf (aref gp0-buffer ,(+ (* texcoord-step 1)
-                                                    texcoord-offset))
-                               (logior (logand (aref gp0-buffer ,(+ (* texcoord-step 0)
-                                                                    texcoord-offset))
-                                                     #xFFFF0000)
-                                       (logand (aref gp0-buffer ,(+ (* texcoord-step 1)
-                                                                    texcoord-offset))
-                                                     #x0000FFFF)))
-                         ))
-
-                   ,@(when is-quad
-                       (if gouraud-shaded
-                         ;; Gouraud version
-                         `(;; Copy and set command
-                           (setf (aref gp0-buffer ,color-step)
-                                 (logior (logand (aref gp0-buffer 0) #xF7000000)
-                                         (logand (aref gp0-buffer ,color-step) #x00FFFFFF)))
-
-                           ;; Overwrite
-                           (dotimes (i (- gp0-buffer-length ,color-step))
-                             (setf (aref gp0-buffer i)
-                                   (aref gp0-buffer (+ i ,color-step))))
-
-                           ;; Return
-                           (decf gp0-buffer-length ,color-step)
-                           (return-from keep-gp0-buffer nil))
-
-                         ;; Flat version
-                         `(;; Set command
-                           (setf (aref gp0-buffer 0)
-                                 (logand (aref gp0-buffer 0) #xF7FFFFFF))
-
-                           ;; Overwrite
-                           (dotimes (i (- gp0-buffer-length ,vertex-step 1))
-                             (setf (aref gp0-buffer (+ 1 i))
-                                   (aref gp0-buffer (+ 1 i ,vertex-step))))
-
-                           ;; Return
-                           (decf gp0-buffer-length ,vertex-step)
-                           (return-from keep-gp0-buffer nil))))
-                   ))))
-
-           (/draw-line (index)
-             (let* ((semi-transparent (/= 0 (logand index #x02)))
-                    (poly-line        (/= 0 (logand index #x08)))
-                    (gouraud-shaded   (/= 0 (logand index #x10)))
-                    (words-for-color  (if gouraud-shaded 2 1))
-                    (words-needed     (+ 2 words-for-color))
-                    (color-offset     0)
-                    (vertex-offset    1)
-                    (color-step       (if gouraud-shaded 2 0))
-                    (vertex-step      (if gouraud-shaded 2 1))
-                    )
-               (declare (ignore semi-transparent))
-               `(;; TODO: handle poly-lines sanely
-                 ,@(when poly-line
-                   `((error (format nil "TODO: ~2,'8X polyline" ,index))))
-                 (when (< gp0-buffer-length ,words-needed)
-                   (return-from keep-gp0-buffer nil))
-                 ;(format t "line ~2,'8X wcount=~d~%" ,index ,words-needed)
-                 (let* ((vi0 ,(+ vertex-offset (* vertex-step 0)))
-                        (vi1 ,(+ vertex-offset (* vertex-step 1)))
-                        (vd0 (aref gp0-buffer vi0))
-                        (vd1 (aref gp0-buffer vi1))
-                        (ci0 ,(+ color-offset  (* color-step  0)))
-                        (cd0 (aref gp0-buffer ci0))
-                        (cd0p (color-24-to-15 cd0))
-                        ,@(if (and nil gouraud-shaded)
-                            `((ci1 ,(+ color-offset  (* color-step  1)))
-                              (cd1 (aref gp0-buffer ci1))
-                              (cd1p (color-24-to-15 cd1))))
-                        (x0  (- (logand (+ vd0 #x0400) #x07FF) #x0400))
-                        (y0  (- (logand (+ (ash vd0 -16) #x0400) #x07FF) #x0400))
-                        (x1  (- (logand (+ vd1 #x0400) #x07FF) #x0400))
-                        (y1  (- (logand (+ (ash vd1 -16) #x0400) #x07FF) #x0400))
-                        (dx (- x1 x0))
-                        (dy (- y1 y0))
-                        )
-
-                   ;; TODO: gouraud shading
-                   ;; TODO: find a reasonably accurate algorithm for xctr/yctr
-                   (if (> (abs dx) (abs dy))
-                     ;; horizontal-major
-                     (let* ((xbeg  (if (< x0 x1) x0 x1))
-                            (xend  (if (< x0 x1) x1 x0))
-                            (ybeg  (if (< x0 x1) y0 y1))
-                            (yend  (if (< x0 x1) y1 y0))
-                            (xlen  (- xend xbeg))
-                            (ylen  (- yend ybeg))
-                            (xlena (abs xlen))
-                            (ylena (abs ylen))
-                            (ystep (if (< yend ybeg) -1 1))
-                            (yctr  0)
-                            (y-mid  ybeg))
-                       (declare (type fixnum xbeg xend ybeg yend xlen ylen xlena ylena ystep yctr y-mid))
-                       (dotimes (xi (+ xlen 1))
-                         (putpixel this (+ xbeg xi) y-mid cd0p)
-                         (decf yctr ylena)
-                         (when (< yctr 0)
-                           (incf yctr xlena)
-                           (incf y-mid ystep)))))
-
-                     ;; vertical-major
-                     (let* ((xbeg  (if (< y0 y1) x0 x1))
-                            (xend  (if (< y0 y1) x1 x0))
-                            (ybeg  (if (< y0 y1) y0 y1))
-                            (yend  (if (< y0 y1) y1 y0))
-                            (xlen  (- xend xbeg))
-                            (ylen  (- yend ybeg))
-                            (xlena (abs xlen))
-                            (ylena (abs ylen))
-                            (xstep (if (< xend xbeg) -1 1))
-                            (xctr  0)
-                            (x-mid  xbeg))
-                       (declare (type fixnum ybeg yend xbeg xend ylen xlen ylena xlena xstep xctr x-mid))
-                       (dotimes (yi (+ ylen 1))
-                         (putpixel this x-mid (+ ybeg yi) cd0p)
-                         (decf xctr xlena)
-                         (when (< xctr 0)
-                           (incf xctr ylena)
-                           (incf x-mid xstep)))))
-                 )))
-
-           (/draw-rect (index)
-             (let* ((raw-textured     (= #x05 (logand index #x05)))
-                    (semi-transparent (/= 0 (logand index #x02)))
-                    (texture-mapped   (/= 0 (logand index #x04)))
-                    (rect-size-enum   (logand #x03 (ash index -3)))
-                    (variably-sized   (= rect-size-enum 0))
-                    (words-needed     (+ 2
-                                         (if texture-mapped 1 0)
-                                         (if variably-sized 1 0)))
-                    (color-offset     0)
-                    (vertex-offset    1)
-                    (texcoord-offset  2)
-                    (size-offset      (if texture-mapped 3 2))
-                    )
-               (declare (ignore semi-transparent raw-textured))
-               `((when (< gp0-buffer-length ,words-needed)
-                   (return-from keep-gp0-buffer nil))
-                 ;(format t "rect ~2,'8X wcount=~d~%" ,index ,words-needed)
-                 (with-slots (global-texpage) this
-                   (let* ((cd  (aref gp0-buffer ,color-offset))
-                          (vd  (aref gp0-buffer ,vertex-offset))
-                          (bx  (- (logand (+ vd #x0400) #x07FF) #x0400))
-                          (by  (- (logand (+ (ash vd -16) #x0400) #x07FF) #x0400))
-                          ,@(when texture-mapped
-                              `((texbpp
-                                  (ecase (logand #x3
-                                                 (ash global-texpage -7))
-                                    ((0)  4)
-                                    ((1)  8)
-                                    ((2) 15)))
-                                (td  (aref gp0-buffer ,texcoord-offset))
-                                (clutref
-                                  (convert-clut-pointer
-                                    (ash td -16)))
-                                (texref
-                                  (convert-texpage-pointer
-                                    global-texpage))
-                                (btx (logand td #xFF))
-                                (bty (logand (ash td -8) #xFF))
-                                ))
-                          ,@(when variably-sized
-                              `((sd (aref gp0-buffer ,size-offset))))
-                          (width ,(ecase rect-size-enum
-                                    ((0) `(logand #x3FF sd))
-                                    ((1) 1)
-                                    ((2) 8)
-                                    ((3) 16)))
-                          (height ,(ecase rect-size-enum
-                                    ((0) `(logand #x1FF (ash sd -16)))
-                                    ((1) 1)
-                                    ((2) 8)
-                                    ((3) 16)))
-                          )
-                     (declare (type fixnum bx by width height))
-                     (declare (ignorable cd))
-                     (dotimes (yi height)
-                       (dotimes (xi width)
-                         (let* ((x (+ xi bx))
-                                (y (+ yi by))
-                                ,@(when texture-mapped
-                                    `((tx (+ xi btx))
-                                      (ty (+ yi bty))))
-                                )
-                           (declare (type fixnum x y
-                                          ,@(when texture-mapped `(tx ty))
-                                          ))
-                           ,@(cond
-                               ;; TODO: non-raw textures
-                               ;; TODO: hoist this out depending on bpp mode
-                               (texture-mapped
-                                 `((let* ((pixelpos
-                                            (ecase texbpp
-                                              ((4)
-                                                 (+ clutref
-                                                    (logand #x000F
-                                                      (ash (aref vram
-                                                             (+ texref
-                                                                (ash tx -2)
-                                                                (* ty 1024)))
-                                                           (* -4 (logand #x3 tx))))))
-                                              ((8)
-                                                 (+ clutref
-                                                    (logand #x00FF
-                                                      (ash (aref vram
-                                                             (+ texref
-                                                                (ash tx -1)
-                                                                (* ty 1024)))
-                                                           (* -8 (logand #x1 tx))))))
-                                              ((15) (+ tx (* ty 1024)))))
-                                          (pixeldata (aref vram pixelpos)))
-                                     (when (/= 0 pixeldata)
-                                       (putpixel this x y pixeldata)))))
-                               (t
-                                 `((putpixel this x y (color-24-to-15 cd))))
-                               )
-                           )))
-                     ))
-                   )))
-           )
-    (/build-geom-body index)))
+                   ;(format t "rect ~2,'8X wcount=~d~%" ,index ,words-needed)
+                   (with-slots (global-texpage) this
+                     (let* ((cd  (aref gp0-buffer ,color-offset))
+                            (vd  (aref gp0-buffer ,vertex-offset))
+                            (bx  (- (logand (+ vd #x0400) #x07FF) #x0400))
+                            (by  (- (logand (+ (ash vd -16) #x0400) #x07FF) #x0400))
+                            ,@(when texture-mapped
+                                `((texbpp
+                                    (ecase (logand #x3
+                                                   (ash global-texpage -7))
+                                      ((0)  4)
+                                      ((1)  8)
+                                      ((2) 15)))
+                                  (td  (aref gp0-buffer ,texcoord-offset))
+                                  (clutref
+                                    (convert-clut-pointer
+                                      (ash td -16)))
+                                  (texref
+                                    (convert-texpage-pointer
+                                      global-texpage))
+                                  (btx (logand td #xFF))
+                                  (bty (logand (ash td -8) #xFF))
+                                  ))
+                            ,@(when variably-sized
+                                `((sd (aref gp0-buffer ,size-offset))))
+                            (width ,(ecase rect-size-enum
+                                      ((0) `(logand #x3FF sd))
+                                      ((1) 1)
+                                      ((2) 8)
+                                      ((3) 16)))
+                            (height ,(ecase rect-size-enum
+                                      ((0) `(logand #x1FF (ash sd -16)))
+                                      ((1) 1)
+                                      ((2) 8)
+                                      ((3) 16)))
+                            )
+                       (declare (type fixnum bx by width height))
+                       (declare (ignorable cd))
+                       (dotimes (yi height)
+                         (dotimes (xi width)
+                           (let* ((x (+ xi bx))
+                                  (y (+ yi by))
+                                  ,@(when texture-mapped
+                                      `((tx (+ xi btx))
+                                        (ty (+ yi bty))))
+                                  )
+                             (declare (type fixnum x y
+                                            ,@(when texture-mapped `(tx ty))
+                                            ))
+                             ,@(cond
+                                 ;; TODO: non-raw textures
+                                 ;; TODO: hoist this out depending on bpp mode
+                                 (texture-mapped
+                                   `((let* ((pixelpos
+                                              (ecase texbpp
+                                                ((4)
+                                                   (+ clutref
+                                                      (logand #x000F
+                                                        (ash (aref vram
+                                                               (+ texref
+                                                                  (ash tx -2)
+                                                                  (* ty 1024)))
+                                                             (* -4 (logand #x3 tx))))))
+                                                ((8)
+                                                   (+ clutref
+                                                      (logand #x00FF
+                                                        (ash (aref vram
+                                                               (+ texref
+                                                                  (ash tx -1)
+                                                                  (* ty 1024)))
+                                                             (* -8 (logand #x1 tx))))))
+                                                ((15) (+ tx (* ty 1024)))))
+                                            (pixeldata (aref vram pixelpos)))
+                                       (when (/= 0 pixeldata)
+                                         (putpixel this x y pixeldata)))))
+                                 (t
+                                   `((putpixel this x y (color-24-to-15 cd))))
+                                 )
+                             )))
+                       ))
+                     )))
+             )
+      (/build-geom-body index))))
 
 (defmacro ecase-with-gp0-geometry (test &body maintests)
   (labels ((/loop-geom (index)
