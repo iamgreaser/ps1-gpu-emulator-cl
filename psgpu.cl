@@ -15,6 +15,13 @@
 
 (ql:quickload :sdl2)
 
+(defmacro swap-pair (p1 p2)
+  `(multiple-value-setq (,p1 ,p2) (values ,p2 ,p1)))
+
+(defparameter *bilerpers* t)
+(defmacro specify-bilerper ()
+  nil)
+
 (defclass psgpu ()
   ((vram
      :type (simple-array (unsigned-byte 16) (524288))
@@ -147,7 +154,8 @@
                ((#x60) (/draw-rect index))))
 
            (/draw-poly (index)
-             (let* ((raw-textured     (= #x05 (logand index #x05)))
+             (let* ((*bilerpers*      (list))
+                    (raw-textured     (= #x05 (logand index #x05)))
                     (semi-transparent (/= 0 (logand index #x02)))
                     (texture-mapped   (/= 0 (logand index #x04)))
                     (is-quad          (/= 0 (logand index #x08)))
@@ -249,7 +257,7 @@
                         (let* ((xlpixel (max 0 clamp-x1 (ash xlpos -12)))
                                (xrpixel (min 1023 clamp-x2 (ash xrpos -12)))
                                (ypixel (+ ,upper-y yi))
-                               ;; TODO: proper gouraud
+                               ;; TODO: get a constant horizontal delta
                                (c-r clpos-r)
                                (c-g clpos-g)
                                (c-b clpos-b)
@@ -409,29 +417,32 @@
                        ;; Order such that (<= y0 y1 y2)
                        ;; Stoogesort is definitely worthwhile here
                        (when (< y2 y1)
-                         (multiple-value-setq (x2 x1) (values x1 x2))
+                         (swap-pair x1 x2)
                          ,@(when gouraud-shaded
-                             `((multiple-value-setq (ct2 ct1) (values ct1 ct2))))
+                             `((swap-pair ct1 ct2)))
                          ,@(when texture-mapped
-                             `((multiple-value-setq (s2 s1) (values s1 s2))
-                               (multiple-value-setq (t2 t1) (values t1 t2))))
-                         (multiple-value-setq (y2 y1) (values y1 y2)))
+                             `((swap-pair s1 s2)
+                               (swap-pair t1 t2)))
+                         (swap-pair y1 y2)
+                         )
                        (when (< y1 y0)
-                         (multiple-value-setq (x1 x0) (values x0 x1))
+                         (swap-pair x0 x1)
                          ,@(when gouraud-shaded
-                             `((multiple-value-setq (ct1 ct0) (values ct0 ct1))))
+                             `((swap-pair ct0 ct1)))
                          ,@(when texture-mapped
-                             `((multiple-value-setq (s1 s0) (values s0 s1))
-                               (multiple-value-setq (t1 t0) (values t0 t1))))
-                         (multiple-value-setq (y1 y0) (values y0 y1)))
+                             `((swap-pair s0 s1)
+                               (swap-pair t0 t1)))
+                         (swap-pair y0 y1)
+                         )
                        (when (< y2 y1)
-                         (multiple-value-setq (x2 x1) (values x1 x2))
+                         (swap-pair x1 x2)
                          ,@(when gouraud-shaded
-                             `((multiple-value-setq (ct2 ct1) (values ct1 ct2))))
+                             `((swap-pair ct1 ct2)))
                          ,@(when texture-mapped
-                             `((multiple-value-setq (s2 s1) (values s1 s2))
-                               (multiple-value-setq (t2 t1) (values t1 t2))))
-                         (multiple-value-setq (y2 y1) (values y1 y2)))
+                             `((swap-pair s1 s2)
+                               (swap-pair t1 t2)))
+                         (swap-pair y1 y2)
+                         )
 
                        (assert (<= y0 y1 y2))
                        
