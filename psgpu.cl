@@ -74,7 +74,6 @@
             forms)))
 
 (defun insert/increment-bilerpers-x ()
-  ;(format t "*** BILERPERS ~s~%" *bilerpers*)
   (mapcan
     #'(lambda (sym)
         (list
@@ -82,6 +81,43 @@
             'incf
             (intern (format nil "~a-POS" sym))
             (intern (format nil "~a-LOCSTEP" sym)))))
+    (remove-if
+      #'(lambda (x) (eql x 'x))
+      *bilerpers*)))
+
+(defun insert/bilerper-lets-y-start ()
+  (mapcan
+    #'(lambda (sym)
+        (sublis
+          `(($-pos     . ,(intern (format nil "~a-POS" sym)))
+            ($-l-pos   . ,(intern (format nil "~a-L-POS" sym)))
+            ($-r-pos   . ,(intern (format nil "~a-R-POS" sym)))
+            ($-span    . ,(intern (format nil "~a-SPAN" sym)))
+            ($-locstep . ,(intern (format nil "~a-LOCSTEP" sym)))
+            )
+        `(($-pos     $-l-pos)
+          ($-span    (- $-r-pos $-l-pos))
+          ($-locstep (floor (/ $-span
+                               (max 1 (- x-r-pixel x-l-pixel)))))
+          )))
+    (remove-if
+      #'(lambda (x) (eql x 'x))
+      *bilerpers*)))
+
+(defun insert/bilerper-declares-y-start ()
+  (mapcar
+    #'(lambda (sym)
+        (list
+          'declare
+          (list
+            'type
+            'fixnum
+            (intern (format nil "~a-POS" sym))
+            (intern (format nil "~a-L-POS" sym))
+            (intern (format nil "~a-R-POS" sym))
+            (intern (format nil "~a-SPAN" sym))
+            (intern (format nil "~a-LOCSTEP" sym))
+            )))
     (remove-if
       #'(lambda (x) (eql x 'x))
       *bilerpers*)))
@@ -276,16 +312,11 @@
                       `((dotimes (yi (- ,lower-y ,upper-y))
                           (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
                                  (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
-                                 (s-pos s-l-pos)
-                                 (t-pos t-l-pos)
-                                 (s-span (- s-r-pos s-l-pos))
-                                 (t-span (- t-r-pos t-l-pos))
-                                 (s-locstep (floor (/ s-span
-                                                      (max 1 (- x-r-pixel x-l-pixel)))))
-                                 (t-locstep (floor (/ t-span
-                                                      (max 1 (- x-r-pixel x-l-pixel)))))
-                                 (y-pixel (+ ,upper-y yi)))
+                                 (y-pixel (+ ,upper-y yi))
+                                 ,@(insert/bilerper-lets-y-start)
+                                 )
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
+                            ,@(insert/bilerper-declares-y-start)
                             (assert (and (<= 0 y-pixel 511)
                                          (<= clamp-y1 y-pixel clamp-y2)))
                             (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
@@ -321,9 +352,9 @@
                                                         (logand #x7FFFF pixelpos))))
                                   (when (/= 0 pixeldata)
                                     (setf (aref vram (+ ibase xi)) pixeldata))
-                                  (incf s-pos s-locstep)
-                                  (incf t-pos t-locstep)
-                                  ;,@(insert/increment-bilerpers-x)
+                                  ;(incf s-pos s-locstep)
+                                  ;(incf t-pos t-locstep)
+                                  ,@(insert/increment-bilerpers-x)
                                   )))
                           ,@(insert/increment-bilerpers-y)
                           ))))
@@ -334,23 +365,10 @@
                                  (x-r-pixel (min 1023 clamp-x2 (ash x-r-pos -12)))
                                  (y-pixel (+ ,upper-y yi))
                                  ;; TODO: get a constant horizontal delta
-                                 (cr-pos cr-l-pos)
-                                 (cg-pos cg-l-pos)
-                                 (cb-pos cb-l-pos)
-                                 (cr-span (- cr-r-pos cr-l-pos))
-                                 (cg-span (- cg-r-pos cg-l-pos))
-                                 (cb-span (- cb-r-pos cb-l-pos))
-                                 (cr-locstep (floor (/ cr-span
-                                                       (max 1 (- x-r-pixel x-l-pixel)))))
-                                 (cg-locstep (floor (/ cg-span
-                                                       (max 1 (- x-r-pixel x-l-pixel)))))
-                                 (cb-locstep (floor (/ cb-span
-                                                       (max 1 (- x-r-pixel x-l-pixel)))))
+                                 ,@(insert/bilerper-lets-y-start)
                                  )
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
-                            (declare (type fixnum cr-pos cg-pos cb-pos))
-                            (declare (type fixnum cr-span cg-span cb-span))
-                            (declare (type fixnum cr-locstep cg-locstep cb-locstep))
+                            ,@(insert/bilerper-declares-y-start)
                             (assert (and (<= 0 y-pixel 511)
                                          (<= clamp-y1 y-pixel clamp-y2)))
                             (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
