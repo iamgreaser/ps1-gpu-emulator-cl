@@ -19,8 +19,55 @@
   `(multiple-value-setq (,p1 ,p2) (values ,p2 ,p1)))
 
 (defparameter *bilerpers* t)
-(defmacro specify-bilerper ()
-  nil)
+
+(defmacro lets-for-triangle (&body forms)
+  (labels ((let-for-triangle (dst-prefix src-prefix base-form)
+             (mapcar
+               #'(lambda (index)
+                   (list
+                     (intern (format nil "~a~d"
+                                     (symbol-name dst-prefix)
+                                     index))
+                     (sublis (list
+                               (cons
+                                 '$x
+                                 (if src-prefix
+                                   (intern (format nil "~a~d"
+                                                   (symbol-name src-prefix)
+                                                   index))
+                                   index)))
+                              base-form)))
+               '(0 1 2))))
+    `',(mapcan #'(lambda (x)
+                   (apply #'let-for-triangle x))
+               forms)))
+
+(defmacro lets-for-lerp-steps-1 (&body forms)
+  (labels ((/transform (sym-base v0 v1 v2)
+             (sublis
+               `(($-top . ,(intern (format nil "~a-TOP" sym-base)))
+                 ($-mid . ,(intern (format nil "~a-MID" sym-base)))
+                 ($-bot . ,(intern (format nil "~a-BOT" sym-base)))
+                 ($-top-step . ,(intern (format nil "~a-TOP-STEP" sym-base)))
+                 ($-bot-step . ,(intern (format nil "~a-BOT-STEP" sym-base)))
+                 ($-maj-step . ,(intern (format nil "~a-MAJ-STEP" sym-base)))
+                 )
+
+               `(($-top ,v0)
+                 ($-mid ,v1)
+                 ($-bot ,v2)
+
+                 ($-top-step (floor (/ (* (- $-mid $-top) #x1000)
+                                     (max 1 (- y-mid y-top)))))
+                 ($-bot-step (floor (/ (* (- $-bot $-mid) #x1000)
+                                     (max 1 (- y-bot y-mid)))))
+                 ($-maj-step (floor (/ (* (- $-bot $-top) #x1000)
+                                     (max 1 (- y-bot y-top)))))
+                 ))))
+    `',(mapcan #'(lambda (x)
+                   (apply #'/transform x))
+               forms)))
+
 
 (defclass psgpu ()
   ((vram
@@ -336,6 +383,9 @@
                    (let* ((vd0 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 0))))
                           (vd1 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 1))))
                           (vd2 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 2))))
+                          ,@(lets-for-triangle
+                              (x vd (- (logand (+ $x #x0400) #x07FF) #x0400))
+                              (y vd (- (logand (+ (ash $x -16) #x0400) #x07FF) #x0400)))
                           (cd0 (aref gp0-buffer ,(+ color-offset  (* color-step  0))))
                           ,@(unless (or texture-mapped gouraud-shaded)
                             `(
@@ -344,39 +394,22 @@
                               `(
                                 (cd1 (aref gp0-buffer ,(+ color-offset  (* color-step  1))))
                                 (cd2 (aref gp0-buffer ,(+ color-offset  (* color-step  2))))
-                                (ct0 (make-array 3
-                                       :element-type 'fixnum
-                                       :initial-contents `(,(logand #xFF (ash cd0 -16))
-                                                           ,(logand #xFF (ash cd0 -8))
-                                                           ,(logand #xFF (ash cd0 -0)))))
-                                (ct1 (make-array 3
-                                       :element-type 'fixnum
-                                       :initial-contents `(,(logand #xFF (ash cd1 -16))
-                                                           ,(logand #xFF (ash cd1 -8))
-                                                           ,(logand #xFF (ash cd1 -0)))))
-                                (ct2 (make-array 3
-                                       :element-type 'fixnum
-                                       :initial-contents `(,(logand #xFF (ash cd2 -16))
-                                                           ,(logand #xFF (ash cd2 -8))
-                                                           ,(logand #xFF (ash cd2 -0)))))
+                                ,@(lets-for-triangle
+                                    (ct cd (make-array 3
+                                             :element-type 'fixnum
+                                             :initial-contents (list
+                                                                 (logand #xFF (ash $x -16))
+                                                                 (logand #xFF (ash $x -8))
+                                                                 (logand #xFF (ash $x -0))))))
                                 ))
                           ,@(when texture-mapped
                               `((td0 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 0))))
                                 (td1 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 1))))
                                 (td2 (aref gp0-buffer ,(+ texcoord-offset (* texcoord-step 2))))
-                                (s0  (logand td0 #x00FF))
-                                (t0  (logand (ash td0 -8) #x00FF))
-                                (s1  (logand td1 #x00FF))
-                                (t1  (logand (ash td1 -8) #x00FF))
-                                (s2  (logand td2 #x00FF))
-                                (t2  (logand (ash td2 -8) #x00FF))
+                                ,@(lets-for-triangle
+                                    (s td (logand $x #x00FF))
+                                    (t td (logand (ash $x -8) #x00FF)))
                                 ))
-                          (x0  (- (logand (+ vd0 #x0400) #x07FF) #x0400))
-                          (y0  (- (logand (+ (ash vd0 -16) #x0400) #x07FF) #x0400))
-                          (x1  (- (logand (+ vd1 #x0400) #x07FF) #x0400))
-                          (y1  (- (logand (+ (ash vd1 -16) #x0400) #x07FF) #x0400))
-                          (x2  (- (logand (+ vd2 #x0400) #x07FF) #x0400))
-                          (y2  (- (logand (+ (ash vd2 -16) #x0400) #x07FF) #x0400))
                           ,@(when texture-mapped
                               `((texpage (ash td1 -16))
                                 (texbpp
@@ -445,107 +478,63 @@
                          )
 
                        (assert (<= y0 y1 y2))
-                       
-                       (let* ((ytop y0)
-                              (ybot y2)
-                              (ymid y1)
-                              (xtop x0)
-                              (xbot x2)
-                              (xmid x1)
 
-                              (xsteptop (floor (/ (* (- xmid xtop) #x1000)
-                                                  (max 1 (- ymid ytop)))))
-                              (xstepbot (floor (/ (* (- xbot xmid) #x1000)
-                                                  (max 1 (- ybot ymid)))))
-                              (xstepmaj (floor (/ (* (- xbot xtop) #x1000)
-                                                  (max 1 (- ybot ytop)))))
+                       (let* ((y-top y0)
+                              (y-bot y2)
+                              (y-mid y1)
+                              ,@(lets-for-lerp-steps-1
+                                  (x x0 x1 x2))
 
                               ,@(when gouraud-shaded
-                                  `((ctop-b (aref ct0 0))
-                                    (ctop-g (aref ct0 1))
-                                    (ctop-r (aref ct0 2))
-                                    (cbot-b (aref ct2 0))
-                                    (cbot-g (aref ct2 1))
-                                    (cbot-r (aref ct2 2))
-                                    (cmid-b (aref ct1 0))
-                                    (cmid-g (aref ct1 1))
-                                    (cmid-r (aref ct1 2))
-                                    (csteptop-r (floor (/ (* (- cmid-r ctop-r) #x1000)
-                                                          (max 1 (- ymid ytop)))))
-                                    (cstepmaj-r (floor (/ (* (- cbot-r ctop-r) #x1000)
-                                                          (max 1 (- ybot ytop)))))
-                                    (cstepbot-r (floor (/ (* (- cbot-r cmid-r) #x1000)
-                                                          (max 1 (- ybot ymid)))))
-                                    (csteptop-g (floor (/ (* (- cmid-g ctop-g) #x1000)
-                                                          (max 1 (- ymid ytop)))))
-                                    (cstepmaj-g (floor (/ (* (- cbot-g ctop-g) #x1000)
-                                                          (max 1 (- ybot ytop)))))
-                                    (cstepbot-g (floor (/ (* (- cbot-g cmid-g) #x1000)
-                                                          (max 1 (- ybot ymid)))))
-                                    (csteptop-b (floor (/ (* (- cmid-b ctop-b) #x1000)
-                                                          (max 1 (- ymid ytop)))))
-                                    (cstepmaj-b (floor (/ (* (- cbot-b ctop-b) #x1000)
-                                                          (max 1 (- ybot ytop)))))
-                                    (cstepbot-b (floor (/ (* (- cbot-b cmid-b) #x1000)
-                                                          (max 1 (- ybot ymid)))))
+                                  `(,@(lets-for-lerp-steps-1
+                                        (cr (aref ct0 2) (aref ct1 2) (aref ct2 2))
+                                        (cg (aref ct0 1) (aref ct1 1) (aref ct2 1))
+                                        (cb (aref ct0 0) (aref ct1 0) (aref ct2 0))
+                                        )
                                     ))
 
                               ,@(when texture-mapped
-                                  `((stop s0)
-                                    (sbot s2)
-                                    (smid s1)
-                                    (ttop t0)
-                                    (tbot t2)
-                                    (tmid t1)
-                                    (ssteptop (floor (/ (* (- smid stop) #x1000)
-                                                        (max 1 (- ymid ytop)))))
-                                    (sstepmaj (floor (/ (* (- sbot stop) #x1000)
-                                                        (max 1 (- ybot ytop)))))
-                                    (sstepbot (floor (/ (* (- sbot smid) #x1000)
-                                                        (max 1 (- ybot ymid)))))
-                                    (tsteptop (floor (/ (* (- tmid ttop) #x1000)
-                                                        (max 1 (- ymid ytop)))))
-                                    (tstepmaj (floor (/ (* (- tbot ttop) #x1000)
-                                                        (max 1 (- ybot ytop)))))
-                                    (tstepbot (floor (/ (* (- tbot tmid) #x1000)
-                                                        (max 1 (- ybot ymid)))))
+                                  `(,@(lets-for-lerp-steps-1
+                                        (s s0 s1 s2)
+                                        (t t0 t1 t2)
+                                        )
                                     ))
 
                               (left-major
-                                (if (= ytop ymid)
-                                  (> xstepmaj xstepbot)
-                                  (< xstepmaj xsteptop)))
-                              (xlpos  (+ (ash xtop 12) #x0800))
-                              (xrpos  (+ (ash xtop 12) #x0800))
-                              (xlstep (if left-major xstepmaj xsteptop))
-                              (xrstep (if left-major xsteptop xstepmaj))
+                                (if (= y-top y-mid)
+                                  (> x-maj-step x-bot-step)
+                                  (< x-maj-step x-top-step)))
+                              (xlpos  (+ (ash x-top 12) #x0800))
+                              (xrpos  (+ (ash x-top 12) #x0800))
+                              (xlstep (if left-major x-maj-step x-top-step))
+                              (xrstep (if left-major x-top-step x-maj-step))
                               ,@(when gouraud-shaded
-                                  `((clpos-r  (+ (ash ctop-r 12) #x0800))
-                                    (crpos-r  (+ (ash ctop-r 12) #x0800))
-                                    (clstep-r (if left-major cstepmaj-r csteptop-r))
-                                    (crstep-r (if left-major csteptop-r cstepmaj-r))
-                                    (clpos-g  (+ (ash ctop-g 12) #x0800))
-                                    (crpos-g  (+ (ash ctop-g 12) #x0800))
-                                    (clstep-g (if left-major cstepmaj-g csteptop-g))
-                                    (crstep-g (if left-major csteptop-g cstepmaj-g))
-                                    (clpos-b  (+ (ash ctop-b 12) #x0800))
-                                    (crpos-b  (+ (ash ctop-b 12) #x0800))
-                                    (clstep-b (if left-major cstepmaj-b csteptop-b))
-                                    (crstep-b (if left-major csteptop-b cstepmaj-b))
+                                  `((clpos-r  (+ (ash cr-top 12) #x0800))
+                                    (crpos-r  (+ (ash cr-top 12) #x0800))
+                                    (clstep-r (if left-major cr-maj-step cr-top-step))
+                                    (crstep-r (if left-major cr-top-step cr-maj-step))
+                                    (clpos-g  (+ (ash cg-top 12) #x0800))
+                                    (crpos-g  (+ (ash cg-top 12) #x0800))
+                                    (clstep-g (if left-major cg-maj-step cg-top-step))
+                                    (crstep-g (if left-major cg-top-step cg-maj-step))
+                                    (clpos-b  (+ (ash cb-top 12) #x0800))
+                                    (crpos-b  (+ (ash cb-top 12) #x0800))
+                                    (clstep-b (if left-major cb-maj-step cb-top-step))
+                                    (crstep-b (if left-major cb-top-step cb-maj-step))
                                     ))
                               ,@(when texture-mapped
-                                  `((slpos  (+ (ash stop 12) #x0800))
-                                    (srpos  (+ (ash stop 12) #x0800))
-                                    (slstep (if left-major sstepmaj ssteptop))
-                                    (srstep (if left-major ssteptop sstepmaj))
-                                    (tlpos  (+ (ash ttop 12) #x0800))
-                                    (trpos  (+ (ash ttop 12) #x0800))
-                                    (tlstep (if left-major tstepmaj tsteptop))
-                                    (trstep (if left-major tsteptop tstepmaj))
+                                  `((slpos  (+ (ash s-top 12) #x0800))
+                                    (srpos  (+ (ash s-top 12) #x0800))
+                                    (slstep (if left-major s-maj-step s-top-step))
+                                    (srstep (if left-major s-top-step s-maj-step))
+                                    (tlpos  (+ (ash t-top 12) #x0800))
+                                    (trpos  (+ (ash t-top 12) #x0800))
+                                    (tlstep (if left-major t-maj-step t-top-step))
+                                    (trstep (if left-major t-top-step t-maj-step))
                                     ))
                               )
-                         (declare (type fixnum ytop ymid ybot xtop xmid xbot))
-                         (declare (type fixnum xsteptop xstepbot xstepmaj))
+                         (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot))
+                         (declare (type fixnum x-top-step x-bot-step x-maj-step))
                          (declare (type fixnum xlpos xrpos xlstep xrstep))
                          ,@(when texture-mapped
                              `((declare (type fixnum slpos srpos slstep srstep))
@@ -553,53 +542,53 @@
                                ))
 
                          ;; Do top
-                         ,@(/draw-poly-half 'ytop 'ymid)
+                         ,@(/draw-poly-half 'y-top 'y-mid)
 
                          ;; Snap minor
                          (if left-major
                            (progn
-                             (setf xrpos  (+ (ash xmid 12) #x0800))
-                             (setf xrstep xstepbot)
+                             (setf xrpos  (+ (ash x-mid 12) #x0800))
+                             (setf xrstep x-bot-step)
                              ,@(when gouraud-shaded
                                  `(;
-                                   (setf crpos-r  (+ (ash cmid-r 12) #x0800))
-                                   (setf crstep-r cstepbot-r)
-                                   (setf crpos-g  (+ (ash cmid-g 12) #x0800))
-                                   (setf crstep-g cstepbot-g)
-                                   (setf crpos-b  (+ (ash cmid-b 12) #x0800))
-                                   (setf crstep-b cstepbot-b)
+                                   (setf crpos-r  (+ (ash cr-mid 12) #x0800))
+                                   (setf crstep-r cr-bot-step)
+                                   (setf crpos-g  (+ (ash cg-mid 12) #x0800))
+                                   (setf crstep-g cg-bot-step)
+                                   (setf crpos-b  (+ (ash cb-mid 12) #x0800))
+                                   (setf crstep-b cb-bot-step)
                                    ))
                              ,@(when texture-mapped
                                  `(;
-                                   (setf srpos  (+ (ash smid 12) #x0800))
-                                   (setf srstep sstepbot)
-                                   (setf trpos  (+ (ash tmid 12) #x0800))
-                                   (setf trstep tstepbot)
+                                   (setf srpos  (+ (ash s-mid 12) #x0800))
+                                   (setf srstep s-bot-step)
+                                   (setf trpos  (+ (ash t-mid 12) #x0800))
+                                   (setf trstep t-bot-step)
                                    ))
                              )
                            (progn
-                             (setf xlpos  (+ (ash xmid 12) #x0800))
-                             (setf xlstep xstepbot)
+                             (setf xlpos  (+ (ash x-mid 12) #x0800))
+                             (setf xlstep x-bot-step)
                              ,@(when gouraud-shaded
                                  `(;
-                                   (setf clpos-r  (+ (ash cmid-r 12) #x0800))
-                                   (setf clstep-r cstepbot-r)
-                                   (setf clpos-g  (+ (ash cmid-g 12) #x0800))
-                                   (setf clstep-g cstepbot-g)
-                                   (setf clpos-b  (+ (ash cmid-b 12) #x0800))
-                                   (setf clstep-b cstepbot-b)
+                                   (setf clpos-r  (+ (ash cr-mid 12) #x0800))
+                                   (setf clstep-r cr-bot-step)
+                                   (setf clpos-g  (+ (ash cg-mid 12) #x0800))
+                                   (setf clstep-g cg-bot-step)
+                                   (setf clpos-b  (+ (ash cb-mid 12) #x0800))
+                                   (setf clstep-b cb-bot-step)
                                    ))
                              ,@(when texture-mapped
                                  `(;
-                                   (setf slpos  (+ (ash smid 12) #x0800))
-                                   (setf slstep sstepbot)
-                                   (setf tlpos  (+ (ash tmid 12) #x0800))
-                                   (setf tlstep tstepbot)
+                                   (setf slpos  (+ (ash s-mid 12) #x0800))
+                                   (setf slstep s-bot-step)
+                                   (setf tlpos  (+ (ash t-mid 12) #x0800))
+                                   (setf tlstep t-bot-step)
                                    ))
                              ))
 
                          ;; Do bottom
-                         ,@(/draw-poly-half 'ymid 'ybot)
+                         ,@(/draw-poly-half 'y-mid 'y-bot)
 
                          )))
 
@@ -625,7 +614,7 @@
                                                                     texcoord-offset))
                                                      #x0000FFFF)))
                          ))
-                         
+
                    ,@(when is-quad
                        (if gouraud-shaded
                          ;; Gouraud version
@@ -709,14 +698,14 @@
                             (ylena (abs ylen))
                             (ystep (if (< yend ybeg) -1 1))
                             (yctr  0)
-                            (ymid  ybeg))
-                       (declare (type fixnum xbeg xend ybeg yend xlen ylen xlena ylena ystep yctr ymid))
+                            (y-mid  ybeg))
+                       (declare (type fixnum xbeg xend ybeg yend xlen ylen xlena ylena ystep yctr y-mid))
                        (dotimes (xi (+ xlen 1))
-                         (putpixel this (+ xbeg xi) ymid cd0p)
+                         (putpixel this (+ xbeg xi) y-mid cd0p)
                          (decf yctr ylena)
                          (when (< yctr 0)
                            (incf yctr xlena)
-                           (incf ymid ystep)))))
+                           (incf y-mid ystep)))))
 
                      ;; vertical-major
                      (let* ((xbeg  (if (< y0 y1) x0 x1))
@@ -729,14 +718,14 @@
                             (ylena (abs ylen))
                             (xstep (if (< xend xbeg) -1 1))
                             (xctr  0)
-                            (xmid  xbeg))
-                       (declare (type fixnum ybeg yend xbeg xend ylen xlen ylena xlena xstep xctr xmid))
+                            (x-mid  xbeg))
+                       (declare (type fixnum ybeg yend xbeg xend ylen xlen ylena xlena xstep xctr x-mid))
                        (dotimes (yi (+ ylen 1))
-                         (putpixel this xmid (+ ybeg yi) cd0p)
+                         (putpixel this x-mid (+ ybeg yi) cd0p)
                          (decf xctr xlena)
                          (when (< xctr 0)
                            (incf xctr ylena)
-                           (incf xmid xstep)))))
+                           (incf x-mid xstep)))))
                  )))
 
            (/draw-rect (index)
