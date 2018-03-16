@@ -129,14 +129,28 @@
           )))
     *bilerpers*))
 
+(defun insert/increment-bilerpers-x-leftclamp ()
+  (mapcan
+    #'(lambda (sym)
+        (sublis
+          `(($-pos      . ,(intern (format nil "~a-POS" sym)))
+            ($-locstep  . ,(intern (format nil "~a-LOCSTEP" sym)))
+            )
+        `((incf $-pos (* $-locstep (- x-l-pixel x-l-effpixel)))
+          )))
+    (remove-if
+      #'(lambda (x) (eql x 'x))
+      *bilerpers*)))
+
 (defun insert/increment-bilerpers-x ()
   (mapcan
     #'(lambda (sym)
-        (list
-          (list
-            'incf
-            (intern (format nil "~a-POS" sym))
-            (intern (format nil "~a-LOCSTEP" sym)))))
+        (sublis
+          `(($-pos      . ,(intern (format nil "~a-POS" sym)))
+            ($-locstep  . ,(intern (format nil "~a-LOCSTEP" sym)))
+            )
+        `((incf $-pos $-locstep)
+          )))
     (remove-if
       #'(lambda (x) (eql x 'x))
       *bilerpers*)))
@@ -446,6 +460,7 @@
                                  )
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
                             ,@(insert/bilerper-declares-y-start)
+                            ,@(insert/increment-bilerpers-x-leftclamp)
                             (when (<= clamp-y1 y-pixel clamp-y2)
                               ;
                               (assert (and (<= 0 y-pixel 511)
