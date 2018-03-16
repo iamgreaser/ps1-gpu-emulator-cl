@@ -364,6 +364,7 @@
 
              (/semi-transparent-blend (texpage-ref)
                `((let* ((dst (aref vram (+ ibase xi))))
+                   (declare (type fixnum dst))
                    (ecase (logand #x3 (ash ,texpage-ref -5))
                      ((0)
                       (setf (aref vram (+ ibase xi))
@@ -446,6 +447,7 @@
                                                (* ty 1024))))
                                         (* -8 (logand #x1 tx))))))
                            ((15) (+ tx (* ty 1024))))))
+                  (declare (type fixnum pixelpos))
                   (aref vram (logand #x7FFFF pixelpos))))
 
              (/draw-poly (index)
@@ -482,6 +484,7 @@
                                  (y-pixel (+ (max ,upper-y clamp-y1) yi))
                                  ,@(insert/bilerper-lets-y-start)
                                  )
+                            (declare (type fixnum x-l-effpixel x-r-effpixel))
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
                             ,@(insert/bilerper-declares-y-start)
                             ,@(insert/increment-bilerpers-x-leftclamp)
@@ -511,6 +514,9 @@
                                                       '(min #xFF (ash (* (ash cb-pos -12)
                                                                          tex-b) -4)))))
                                         ;
+                                        (declare (type fixnum tx ty))
+                                        (declare (type fixnum pixdata))
+                                        (declare (type fixnum tex-r tex-g tex-b))
                                         (declare (type fixnum cd0p))
 
                                         ;; TODO: mask-bit setting
@@ -597,11 +603,15 @@
                             )
                        ;(declare (ignorable cd0))
                        (declare (type fixnum x0 y0 x1 y1 x2 y2))
+                       ,@(when texture-mapped
+                           `((declare (type fixnum texpage texbpp clutref texref))))
 
                        (with-slots (clamp-x1 clamp-y1
                                     clamp-x2 clamp-y2
                                     offs-x offs-y
                                     global-texpage) this
+                         (declare (type fixnum clamp-x1 clamp-y1 clamp-x2 clamp-y2))
+                         (declare (type fixnum offs-x offs-y global-texpage))
                          (incf x0 offs-x)
                          (incf x1 offs-x)
                          (incf x2 offs-x)
