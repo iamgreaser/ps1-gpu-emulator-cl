@@ -280,6 +280,65 @@
                         (ash (logand #xF8 ,g)  2)
                         (ash (logand #xF8 ,b)  7)))
 
+             (/semi-transparent-blend (texpage-ref)
+               `((let* ((dst (aref vram (+ ibase xi))))
+                   (ecase (logand #x3 (ash ,texpage-ref -5))
+                     ((0)
+                      (setf (aref vram (+ ibase xi))
+                            (logior
+                              (logand
+                                #x7C1F (ash (+ (logand #x7C1F dst)
+                                               (logand #x7C1F cd0p))
+                                         -1))
+                              (logand
+                                #x03E0 (ash (+ (logand #x03E0 dst)
+                                               (logand #x03E0 cd0p))
+                                         -1)))))
+
+                     ((1)
+                      (setf (aref vram (+ ibase xi))
+                            (logior
+                              (min
+                                #x001F (+ (logand #x001F dst)
+                                          (logand #x001F cd0p)))
+                              (min
+                                #x03E0 (+ (logand #x03E0 dst)
+                                          (logand #x03E0 cd0p)))
+                              (min
+                                #x7C00 (+ (logand #x7C00 dst)
+                                          (logand #x7C00 cd0p)))
+                              )))
+
+                     ((2)
+                      (setf (aref vram (+ ibase xi))
+                            (logior
+                              (max
+                                #x0000 (- (logand #x001F dst)
+                                          (logand #x001F cd0p)))
+                              (max
+                                #x0000 (- (logand #x03E0 dst)
+                                          (logand #x03E0 cd0p)))
+                              (max
+                                #x0000 (- (logand #x7C00 dst)
+                                          (logand #x7C00 cd0p)))
+                              )))
+
+                     ((3)
+                      (setf (aref vram (+ ibase xi))
+                            (logior
+                              (min
+                                #x001F (+ (logand #x001F dst)
+                                          (logand #x001F (ash cd0p -2))))
+                              (min
+                                #x03E0 (+ (logand #x03E0 dst)
+                                          (logand #x03E0 (ash cd0p -2))))
+                              (min
+                                #x7C00 (+ (logand #x7C00 dst)
+                                          (logand #x7C00 (ash cd0p -2))))
+                              )))
+
+                     ))))
+
              (/get-texture ()
                `(let* ((pixelpos
                          (ecase texbpp
@@ -370,19 +429,7 @@
                                           ,@(if semi-transparent
                                               `((if (>= pixdata #x8000)
                                                   ;; Semi-transparent
-                                                  (let* ((dst (aref vram (+ ibase xi))))
-                                                    (setf (aref vram (+ ibase xi))
-                                                          (logior
-                                                            (logand
-                                                              #x7C1F (ash
-                                                                       (+ (logand #x7C1F dst)
-                                                                          (logand #x7C1F cd0p))
-                                                                       -1))
-                                                            (logand
-                                                              #x03E0 (ash
-                                                                       (+ (logand #x03E0 dst)
-                                                                          (logand #x03E0 cd0p))
-                                                                       -1)))))
+                                                  ,@(/semi-transparent-blend 'texpage)
                                                   ;; Non-translucent
                                                   (setf (aref vram (+ ibase xi)) cd0p)))
                                               `((setf (aref vram (+ ibase xi)) cd0p))))
@@ -394,19 +441,7 @@
                                         ;
                                         (declare (type fixnum cd0p))
                                         ,@(if semi-transparent
-                                            `((let* ((dst (aref vram (+ ibase xi))))
-                                                (setf (aref vram (+ ibase xi))
-                                                      (logior
-                                                        (logand
-                                                          #x7C1F (ash
-                                                                   (+ (logand #x7C1F dst)
-                                                                      (logand #x7C1F cd0p))
-                                                                   -1))
-                                                        (logand
-                                                          #x03E0 (ash
-                                                                   (+ (logand #x03E0 dst)
-                                                                      (logand #x03E0 cd0p))
-                                                                   -1))))))
+                                            `(,@(/semi-transparent-blend 'global-texpage))
                                             `((setf (aref vram (+ ibase xi)) cd0p)))
                                         )))
                                 ,@(insert/increment-bilerpers-x))))
@@ -477,7 +512,8 @@
 
                        (with-slots (clamp-x1 clamp-y1
                                     clamp-x2 clamp-y2
-                                    offs-x offs-y) this
+                                    offs-x offs-y
+                                    global-texpage) this
                          (incf x0 offs-x)
                          (incf x1 offs-x)
                          (incf x2 offs-x)
