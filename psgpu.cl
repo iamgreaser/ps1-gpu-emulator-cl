@@ -329,7 +329,7 @@
                       (texcoord-step    (+ args-per-point
                                            (if gouraud-shaded 1 0)))
                       )
-                 (declare (ignore semi-transparent raw-textured))
+                 (declare (ignore raw-textured))
                  (labels
                    ((/draw-poly-half (upper-y lower-y)
                       `((dotimes (yi (- ,lower-y ,upper-y))
@@ -363,8 +363,29 @@
                                                                          tex-b) -4)))))
                                         ;
                                         (declare (type fixnum cd0p))
+
+                                        ;; TODO: mask-bit setting
+                                        ;; TODO: non-half-blend translucency
                                         (when (/= 0 pixdata)
-                                          (setf (aref vram (+ ibase xi)) cd0p))
+                                          ,@(if semi-transparent
+                                              `((if (>= pixdata #x8000)
+                                                  ;; Semi-transparent
+                                                  (let* ((dst (aref vram (+ ibase xi))))
+                                                    (setf (aref vram (+ ibase xi))
+                                                          (logior
+                                                            (logand
+                                                              #x7C1F (ash
+                                                                       (+ (logand #x7C1F dst)
+                                                                          (logand #x7C1F cd0p))
+                                                                       -1))
+                                                            (logand
+                                                              #x03E0 (ash
+                                                                       (+ (logand #x03E0 dst)
+                                                                          (logand #x03E0 cd0p))
+                                                                       -1)))))
+                                                  ;; Non-translucent
+                                                  (setf (aref vram (+ ibase xi)) cd0p)))
+                                              `((setf (aref vram (+ ibase xi)) cd0p))))
                                         ))
                                     `((let* ((cd0p ,(/converting-24-to-15
                                                       '(ash cr-pos -12)
@@ -372,7 +393,21 @@
                                                       '(ash cb-pos -12))))
                                         ;
                                         (declare (type fixnum cd0p))
-                                        (setf (aref vram (+ ibase xi)) cd0p)
+                                        ,@(if semi-transparent
+                                            `((let* ((dst (aref vram (+ ibase xi))))
+                                                (setf (aref vram (+ ibase xi))
+                                                      (logior
+                                                        (logand
+                                                          #x7C1F (ash
+                                                                   (+ (logand #x7C1F dst)
+                                                                      (logand #x7C1F cd0p))
+                                                                   -1))
+                                                        (logand
+                                                          #x03E0 (ash
+                                                                   (+ (logand #x03E0 dst)
+                                                                      (logand #x03E0 cd0p))
+                                                                   -1))))))
+                                            `((setf (aref vram (+ ibase xi)) cd0p)))
                                         )))
                                 ,@(insert/increment-bilerpers-x))))
                           ,@(insert/increment-bilerpers-y)
