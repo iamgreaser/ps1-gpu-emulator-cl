@@ -275,6 +275,11 @@
                  ((#x40) (/draw-line index))
                  ((#x60) (/draw-rect index))))
 
+             (/converting-24-to-15 (r g b)
+               `(logior (ash (logand #xF8 ,r) -3)
+                        (ash (logand #xF8 ,g)  2)
+                        (ash (logand #xF8 ,b)  7)))
+
              (/get-texture ()
                `(let* ((pixelpos
                          (ecase texbpp
@@ -370,32 +375,40 @@
                                    )
                               (declare (type fixnum ibase))
                               (dotimes (xi (- x-r-pixel x-l-pixel))
-                                ;(let* ((cd0p (logior (ash (logand #xF8
-                                ;                                  (max 0 (min 255
-                                ;                                              (ash cr-pos -12)))) -3)
-                                ;                     (ash (logand #xF8
-                                ;                                  (max 0 (min 255
-                                ;                                              (ash cg-pos -12))))  2)
-                                ;                     (ash (logand #xF8
-                                ;                                  (max 0 (min 255
-                                ;                                              (ash cb-pos -12))))  7))))
-                                ;
-
-                                ;; may potentially artifact
-                                (let* ((cd0p (logior (ash (logand #xF8 (ash cr-pos -12)) -3)
-                                                     (ash (logand #xF8 (ash cg-pos -12))  2)
-                                                     (ash (logand #xF8 (ash cb-pos -12))  7))))
-                                  ;
-                                  (declare (type fixnum cd0p))
-                                  (setf (aref vram (+ ibase xi)) cd0p)
-                                  ,@(insert/increment-bilerpers-x)
-                                  ))))
+                                ,@(if texture-mapped
+                                    `((let* ((tx (ash s-pos -12))
+                                             (ty (ash t-pos -12))
+                                             (pixdata ,(/get-texture))
+                                             (tex-r (logand #x1F (ash pixdata   0)))
+                                             (tex-g (logand #x1F (ash pixdata  -5)))
+                                             (tex-b (logand #x1F (ash pixdata -10)))
+                                             (cd0p ,(/converting-24-to-15
+                                                      '(min #xFF (ash (* (ash cr-pos -12)
+                                                                         tex-r) -4))
+                                                      '(min #xFF (ash (* (ash cg-pos -12)
+                                                                         tex-g) -4))
+                                                      '(min #xFF (ash (* (ash cb-pos -12)
+                                                                         tex-b) -4)))))
+                                        ;
+                                        (declare (type fixnum cd0p))
+                                        (when (/= 0 pixdata)
+                                          (setf (aref vram (+ ibase xi)) cd0p))
+                                        ))
+                                    `((let* ((cd0p ,(/converting-24-to-15
+                                                      '(ash cr-pos -12)
+                                                      '(ash cg-pos -12)
+                                                      '(ash cb-pos -12))))
+                                        ;
+                                        (declare (type fixnum cd0p))
+                                        (setf (aref vram (+ ibase xi)) cd0p)
+                                        )))
+                                ,@(insert/increment-bilerpers-x))))
                           ,@(insert/increment-bilerpers-y)
                           )))
 
                     (/draw-poly-half (upper-y lower-y)
                       (cond
-                        ((and gouraud-shaded (not texture-mapped))
+                        (gouraud-shaded
                           (/draw-poly-half-gouraud upper-y lower-y))
                         (t
                           (/draw-poly-half-rawtex-or-flat upper-y lower-y))))
