@@ -192,15 +192,36 @@
   ;(format t "*** BILERPERS ~s~%" *bilerpers*)
   (mapcan
     #'(lambda (sym)
-        (list
-          (list
-            'incf
-            (intern (format nil "~a-L-POS" sym))
-            (intern (format nil "~a-L-STEP" sym)))
-          (list
-            'incf
-            (intern (format nil "~a-R-POS" sym))
-            (intern (format nil "~a-R-STEP" sym)))))
+        (sublis
+          `(($-l-pos   . ,(intern (format nil "~a-L-POS" sym)))
+            ($-l-step  . ,(intern (format nil "~a-L-STEP" sym)))
+            ($-r-pos   . ,(intern (format nil "~a-R-POS" sym)))
+            ($-r-step  . ,(intern (format nil "~a-R-STEP" sym)))
+            )
+        `((incf $-l-pos $-l-step)
+          (incf $-r-pos $-r-step)
+          )))
+    *bilerpers*))
+
+(defun insert/increment-bilerpers-y-topclamp (upper-y lower-y)
+  ;(format t "*** BILERPERS ~s~%" *bilerpers*)
+  (mapcan
+    #'(lambda (sym)
+        (sublis
+          `(($-l-pos   . ,(intern (format nil "~a-L-POS" sym)))
+            ($-l-step  . ,(intern (format nil "~a-L-STEP" sym)))
+            ($-r-pos   . ,(intern (format nil "~a-R-POS" sym)))
+            ($-r-step  . ,(intern (format nil "~a-R-STEP" sym)))
+            )
+        `((incf $-l-pos (* (- (min (max clamp-y1 ,upper-y)
+                                   ,lower-y)
+                              ,upper-y)
+                           $-l-step))
+          (incf $-r-pos (* (- (min (max clamp-y1 ,upper-y)
+                                   ,lower-y)
+                              ,upper-y)
+                           $-r-step))
+          )))
     *bilerpers*))
 
 (defclass psgpu ()
@@ -450,65 +471,68 @@
                       )
                  (labels
                    ((/draw-poly-half (upper-y lower-y)
-                      `((dotimes (yi (- ,lower-y ,upper-y))
+                      `(,@(insert/increment-bilerpers-y-topclamp upper-y lower-y)
+                        (dotimes (yi (- (min ,lower-y (1+ clamp-y2))
+                                        (max ,upper-y clamp-y1)))
                           (let* ((x-l-effpixel (ash x-l-pos -12))
                                  (x-r-effpixel (ash x-r-pos -12))
                                  (x-l-pixel (max 0    clamp-x1 x-l-effpixel))
                                  (x-r-pixel (min 1023 clamp-x2 x-r-effpixel))
-                                 (y-pixel (+ ,upper-y yi))
+                                 (y-pixel (+ (max ,upper-y clamp-y1) yi))
                                  ,@(insert/bilerper-lets-y-start)
                                  )
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
                             ,@(insert/bilerper-declares-y-start)
                             ,@(insert/increment-bilerpers-x-leftclamp)
-                            (when (<= clamp-y1 y-pixel clamp-y2)
-                              ;
-                              (assert (and (<= 0 y-pixel 511)
-                                           (<= clamp-y1 y-pixel clamp-y2)))
-                              (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
-                                     )
-                                (declare (type fixnum ibase))
-                                (dotimes (xi (- x-r-pixel x-l-pixel))
-                                  (assert (and (<= 0 (+ x-l-pixel xi) 1023)
-                                               (<= clamp-x1 (+ x-l-pixel xi) clamp-x2)))
-                                  ,@(if texture-mapped
-                                      `((let* ((tx (ash s-pos -12))
-                                               (ty (ash t-pos -12))
-                                               (pixdata ,(/get-texture))
-                                               (tex-r (logand #x1F (ash pixdata   0)))
-                                               (tex-g (logand #x1F (ash pixdata  -5)))
-                                               (tex-b (logand #x1F (ash pixdata -10)))
-                                               (cd0p ,(/converting-24-to-15
-                                                        '(min #xFF (ash (* (ash cr-pos -12)
-                                                                           tex-r) -4))
-                                                        '(min #xFF (ash (* (ash cg-pos -12)
-                                                                           tex-g) -4))
-                                                        '(min #xFF (ash (* (ash cb-pos -12)
-                                                                           tex-b) -4)))))
-                                          ;
-                                          (declare (type fixnum cd0p))
+                            (assert (and (<= 0 y-pixel 511)
+                                         (<= clamp-y1 y-pixel clamp-y2)))
+                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
+                                   )
+                              (declare (type fixnum ibase))
+                              (when (<= x-l-pixel x-r-pixel)
+                                (assert (and (<= 0 x-l-pixel 1023)
+                                             (<= 0 x-r-pixel 1023)
+                                             (<= clamp-x1 x-l-pixel clamp-x2)
+                                             (<= clamp-x1 x-r-pixel clamp-x2))))
+                              (dotimes (xi (- x-r-pixel x-l-pixel))
+                                ,@(if texture-mapped
+                                    `((let* ((tx (ash s-pos -12))
+                                             (ty (ash t-pos -12))
+                                             (pixdata ,(/get-texture))
+                                             (tex-r (logand #x1F (ash pixdata   0)))
+                                             (tex-g (logand #x1F (ash pixdata  -5)))
+                                             (tex-b (logand #x1F (ash pixdata -10)))
+                                             (cd0p ,(/converting-24-to-15
+                                                      '(min #xFF (ash (* (ash cr-pos -12)
+                                                                         tex-r) -4))
+                                                      '(min #xFF (ash (* (ash cg-pos -12)
+                                                                         tex-g) -4))
+                                                      '(min #xFF (ash (* (ash cb-pos -12)
+                                                                         tex-b) -4)))))
+                                        ;
+                                        (declare (type fixnum cd0p))
 
-                                          ;; TODO: mask-bit setting
-                                          (when (/= 0 pixdata)
-                                            ,@(if semi-transparent
-                                                `((if (>= pixdata #x8000)
-                                                    ;; Semi-transparent
-                                                    ,@(/semi-transparent-blend 'texpage)
-                                                    ;; Non-translucent
-                                                    (setf (aref vram (+ ibase xi)) cd0p)))
-                                                `((setf (aref vram (+ ibase xi)) cd0p))))
-                                          ))
-                                      `((let* ((cd0p ,(/converting-24-to-15
-                                                        '(ash cr-pos -12)
-                                                        '(ash cg-pos -12)
-                                                        '(ash cb-pos -12))))
-                                          ;
-                                          (declare (type fixnum cd0p))
+                                        ;; TODO: mask-bit setting
+                                        (when (/= 0 pixdata)
                                           ,@(if semi-transparent
-                                              `(,@(/semi-transparent-blend 'global-texpage))
-                                              `((setf (aref vram (+ ibase xi)) cd0p)))
-                                          )))
-                                  ,@(insert/increment-bilerpers-x)))))
+                                              `((if (>= pixdata #x8000)
+                                                  ;; Semi-transparent
+                                                  ,@(/semi-transparent-blend 'texpage)
+                                                  ;; Non-translucent
+                                                  (setf (aref vram (+ ibase xi)) cd0p)))
+                                              `((setf (aref vram (+ ibase xi)) cd0p))))
+                                        ))
+                                    `((let* ((cd0p ,(/converting-24-to-15
+                                                      '(ash cr-pos -12)
+                                                      '(ash cg-pos -12)
+                                                      '(ash cb-pos -12))))
+                                        ;
+                                        (declare (type fixnum cd0p))
+                                        ,@(if semi-transparent
+                                            `(,@(/semi-transparent-blend 'global-texpage))
+                                            `((setf (aref vram (+ ibase xi)) cd0p)))
+                                        )))
+                                ,@(insert/increment-bilerpers-x))))
                           ,@(insert/increment-bilerpers-y)
                           )))
                     )
