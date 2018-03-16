@@ -331,35 +331,7 @@
                       )
                  (declare (ignore semi-transparent raw-textured))
                  (labels
-                   ((/draw-poly-half-rawtex-or-flat (upper-y lower-y)
-                      `((dotimes (yi (- ,lower-y ,upper-y))
-                          (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
-                                 (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
-                                 (y-pixel (+ ,upper-y yi))
-                                 ,@(insert/bilerper-lets-y-start)
-                                 )
-                            (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
-                            ,@(insert/bilerper-declares-y-start)
-                            (assert (and (<= 0 y-pixel 511)
-                                         (<= clamp-y1 y-pixel clamp-y2)))
-                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
-                              (declare (type fixnum ibase))
-                              (dotimes (xi (- x-r-pixel x-l-pixel))
-                                ,@(if texture-mapped
-                                    `((let* ((tx (ash s-pos -12))
-                                             (ty (ash t-pos -12))
-                                             (pixeldata ,(/get-texture)))
-                                        (when (/= 0 pixeldata)
-                                          (setf (aref vram (+ ibase xi)) pixeldata))))
-                                    `((setf (aref vram (+ ibase xi)) cd0p)))
-                                ;(incf s-pos s-locstep)
-                                ;(incf t-pos t-locstep)
-                                ,@(insert/increment-bilerpers-x)
-                                ))
-                          ,@(insert/increment-bilerpers-y)
-                          ))))
-
-                    (/draw-poly-half-gouraud (upper-y lower-y)
+                   ((/draw-poly-half (upper-y lower-y)
                       `((dotimes (yi (- ,lower-y ,upper-y))
                           (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
                                  (x-r-pixel (min 1023 clamp-x2 (ash x-r-pos -12)))
@@ -405,13 +377,6 @@
                                 ,@(insert/increment-bilerpers-x))))
                           ,@(insert/increment-bilerpers-y)
                           )))
-
-                    (/draw-poly-half (upper-y lower-y)
-                      (cond
-                        (gouraud-shaded
-                          (/draw-poly-half-gouraud upper-y lower-y))
-                        (t
-                          (/draw-poly-half-rawtex-or-flat upper-y lower-y))))
                     )
 
                    ;;
@@ -425,13 +390,23 @@
                                 (x vd (- (logand (+ $x #x0400) #x07FF) #x0400))
                                 (y vd (- (logand (+ (ash $x -16) #x0400) #x07FF) #x0400)))
                             (cd0 (aref gp0-buffer ,(+ color-offset  (* color-step  0))))
-                            ,@(unless (or texture-mapped gouraud-shaded)
+                            ,@(unless (or texture-mapped gouraud-shaded t)
                               `(
                                 (cd0p (color-24-to-15 cd0))))
                             ,@(when gouraud-shaded
                                 `(
                                   (cd1 (aref gp0-buffer ,(+ color-offset  (* color-step  1))))
                                   (cd2 (aref gp0-buffer ,(+ color-offset  (* color-step  2))))
+                                  ,@(lets-for-triangle
+                                      (cr cd (logand #xFF (ash $x  -0)))
+                                      (cg cd (logand #xFF (ash $x  -8)))
+                                      (cb cd (logand #xFF (ash $x -16)))
+                                      )
+                                  ))
+                            ,@(unless gouraud-shaded
+                                `(
+                                  (cd1 cd0)
+                                  (cd2 cd0)
                                   ,@(lets-for-triangle
                                       (cr cd (logand #xFF (ash $x  -0)))
                                       (cg cd (logand #xFF (ash $x  -8)))
@@ -530,7 +505,7 @@
                                 ,@(lets-for-lerp-steps-1
                                     '(x x0 x1 x2))
 
-                                ,@(when gouraud-shaded
+                                ,@(when (or t gouraud-shaded)
                                     `(,@(lets-for-lerp-steps-1
                                           '(cr cr0 cr1 cr2)
                                           '(cg cg0 cg1 cg2)
@@ -553,7 +528,7 @@
                                 (x-r-pos  (+ (ash x-top 12) #x0800))
                                 (x-l-step (if left-major x-maj-step x-top-step))
                                 (x-r-step (if left-major x-top-step x-maj-step))
-                                ,@(when gouraud-shaded
+                                ,@(when (or t gouraud-shaded)
                                     `((cr-l-pos  (+ (ash cr-top 12) #x0800))
                                       (cr-r-pos  (+ (ash cr-top 12) #x0800))
                                       (cr-l-step (if left-major cr-maj-step cr-top-step))
@@ -582,7 +557,7 @@
                            (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot x-altmid))
                            (declare (type fixnum x-top-step x-bot-step x-maj-step))
                            (declare (type fixnum x-l-pos x-r-pos x-l-step x-r-step))
-                           ,@(when gouraud-shaded
+                           ,@(when (or t gouraud-shaded)
                                `((declare (type fixnum cr-l-pos cr-r-pos cr-l-step cr-r-step))
                                  (declare (type fixnum cg-l-pos cg-r-pos cg-l-step cg-r-step))
                                  (declare (type fixnum cb-l-pos cb-r-pos cb-l-step cb-r-step))
@@ -600,7 +575,7 @@
                              (progn
                                (setf x-r-pos  (+ (ash x-mid 12) #x0800))
                                (setf x-r-step x-bot-step)
-                               ,@(when gouraud-shaded
+                               ,@(when (or t gouraud-shaded)
                                    `(;
                                      (setf cr-r-pos  (+ (ash cr-mid 12) #x0800))
                                      (setf cr-r-step cr-bot-step)
@@ -620,7 +595,7 @@
                              (progn
                                (setf x-l-pos  (+ (ash x-mid 12) #x0800))
                                (setf x-l-step x-bot-step)
-                               ,@(when gouraud-shaded
+                               ,@(when (or t gouraud-shaded)
                                    `(;
                                      (setf cr-l-pos  (+ (ash cr-mid 12) #x0800))
                                      (setf cr-l-step cr-bot-step)
