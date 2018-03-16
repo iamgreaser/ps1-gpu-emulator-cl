@@ -23,6 +23,23 @@
   `(let* ((*bilerpers* (list)))
      ,@body))
 
+(defmacro fix* (vars &body body)
+  `(let* ,(mapcar #'(lambda (pair)
+                      (if (= (length pair) 2)
+                        (destructuring-bind (name value) pair
+                          `(,name (the fixnum ,value))
+                          )
+
+                        `(,(first pair) ,(second pair))))
+                  vars)
+     (declare (type fixnum
+                    ,@(mapcar #'first
+                        (remove-if-not
+                          #'(lambda (pair) (= (length pair) 2))
+                          vars))))
+     ,@body))
+
+
 (defmacro lets-for-triangle (&body forms)
   (labels ((let-for-triangle (dst-prefix src-prefix base-form)
              (mapcar
@@ -111,7 +128,7 @@
             ($-l-step   . ,(intern (format nil "~a-L-STEP" sym)))
             ($-r-step   . ,(intern (format nil "~a-R-STEP" sym)))
             )
-        `((declare (type fixnum $-l-pos $-r-pos $-l-step $-r-step))
+        `(;(declare (type fixnum $-l-pos $-r-pos $-l-step $-r-step))
           )))
     *bilerpers*))
 
@@ -282,7 +299,7 @@
 (defun color-24-to-15 (bgr)
   (declare (inline))
   (declare (type fixnum bgr))
-  (let* ((lb (logand #xFF (ash bgr -0)))
+  (fix* ((lb (logand #xFF (ash bgr -0)))
          (lg (logand #xFF (ash bgr -8)))
          (lr (logand #xFF (ash bgr -16)))
          (sb (ash lb -3))
@@ -296,7 +313,7 @@
 (defun color-15-to-24 (bgr)
   (declare (inline))
   (declare (type fixnum bgr))
-  (let* ((sb (logand #x1F (ash bgr -0)))
+  (fix* ((sb (logand #x1F (ash bgr -0)))
          (sg (logand #x1F (ash bgr -5)))
          (sr (logand #x1F (ash bgr -10)))
          (lb (ash sb 3))
@@ -363,8 +380,7 @@
                         (ash (logand #xF8 ,b)  7)))
 
              (/semi-transparent-blend (texpage-ref)
-               `((let* ((dst (aref vram (+ ibase xi))))
-                   (declare (type fixnum dst))
+               `((fix* ((dst (aref vram (+ ibase xi))))
                    (ecase (logand #x3 (ash ,texpage-ref -5))
                      ((0)
                       (setf (aref vram (+ ibase xi))
@@ -423,7 +439,7 @@
                      ))))
 
              (/get-texture ()
-               `(let* ((pixelpos
+               `(fix* ((pixelpos
                          (ecase texbpp
                            ((4)
                               (+ clutref
@@ -447,7 +463,6 @@
                                                (* ty 1024))))
                                         (* -8 (logand #x1 tx))))))
                            ((15) (+ tx (* ty 1024))))))
-                  (declare (type fixnum pixelpos))
                   (aref vram (logand #x7FFFF pixelpos))))
 
              (/draw-poly (index)
@@ -477,22 +492,19 @@
                       `(,@(insert/increment-bilerpers-y-topclamp upper-y lower-y)
                         (dotimes (yi (- (min ,lower-y (1+ clamp-y2))
                                         (max ,upper-y clamp-y1)))
-                          (let* ((x-l-effpixel (ash x-l-pos -12))
+                          (fix* ((x-l-effpixel (ash x-l-pos -12))
                                  (x-r-effpixel (ash x-r-pos -12))
                                  (x-l-pixel (max 0    clamp-x1 x-l-effpixel))
                                  (x-r-pixel (min 1023 clamp-x2 x-r-effpixel))
                                  (y-pixel (+ (max ,upper-y clamp-y1) yi))
                                  ,@(insert/bilerper-lets-y-start)
                                  )
-                            (declare (type fixnum x-l-effpixel x-r-effpixel))
-                            (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
                             ,@(insert/bilerper-declares-y-start)
                             ,@(insert/increment-bilerpers-x-leftclamp)
                             (assert (and (<= 0 y-pixel 511)
                                          (<= clamp-y1 y-pixel clamp-y2)))
-                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
+                            (fix* ((ibase (+ x-l-pixel (* y-pixel 1024)))
                                    )
-                              (declare (type fixnum ibase))
                               (when (<= x-l-pixel x-r-pixel)
                                 (assert (and (<= 0 x-l-pixel 1023)
                                              (<= 0 x-r-pixel 1023)
@@ -500,7 +512,7 @@
                                              (<= clamp-x1 x-r-pixel clamp-x2))))
                               (dotimes (xi (- x-r-pixel x-l-pixel))
                                 ,@(if texture-mapped
-                                    `((let* ((tx (ash s-pos -12))
+                                    `((fix* ((tx (ash s-pos -12))
                                              (ty (ash t-pos -12))
                                              (pixdata ,(/get-texture))
                                              (tex-r (logand #x1F (ash pixdata   0)))
@@ -514,10 +526,6 @@
                                                       '(min #xFF (ash (* (ash cb-pos -12)
                                                                          tex-b) -4)))))
                                         ;
-                                        (declare (type fixnum tx ty))
-                                        (declare (type fixnum pixdata))
-                                        (declare (type fixnum tex-r tex-g tex-b))
-                                        (declare (type fixnum cd0p))
 
                                         ;; TODO: mask-bit setting
                                         (when (/= 0 pixdata)
@@ -529,12 +537,11 @@
                                                   (setf (aref vram (+ ibase xi)) cd0p)))
                                               `((setf (aref vram (+ ibase xi)) cd0p))))
                                         ))
-                                    `((let* ((cd0p ,(/converting-24-to-15
+                                    `((fix* ((cd0p ,(/converting-24-to-15
                                                       '(ash cr-pos -12)
                                                       '(ash cg-pos -12)
                                                       '(ash cb-pos -12))))
                                         ;
-                                        (declare (type fixnum cd0p))
                                         ,@(if semi-transparent
                                             `(,@(/semi-transparent-blend 'global-texpage))
                                             `((setf (aref vram (+ ibase xi)) cd0p)))
@@ -548,7 +555,7 @@
 
                    `((when (< gp0-buffer-length ,words-needed)
                        (return-from keep-gp0-buffer nil))
-                     (let* ((vd0 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 0))))
+                     (fix* ((vd0 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 0))))
                             (vd1 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 1))))
                             (vd2 (aref gp0-buffer ,(+ vertex-offset (* vertex-step 2))))
                             ,@(lets-for-triangle
@@ -602,9 +609,6 @@
                                       texpage))))
                             )
                        ;(declare (ignorable cd0))
-                       (declare (type fixnum x0 y0 x1 y1 x2 y2))
-                       ,@(when texture-mapped
-                           `((declare (type fixnum texpage texbpp clutref texref))))
 
                        (with-slots (clamp-x1 clamp-y1
                                     clamp-x2 clamp-y2
@@ -669,7 +673,7 @@
 
                            (assert (<= y0 y1 y2))
 
-                           (let* ((y-top y0)
+                           (fix* ((y-top y0)
                                   (y-bot y2)
                                   (y-mid y1)
                                   ,@(lets-for-lerp-steps-1
@@ -693,12 +697,11 @@
                                   (left-major
                                     (if (= y-top y-mid)
                                       (> x-maj-step x-bot-step)
-                                      (< x-maj-step x-top-step)))
+                                      (< x-maj-step x-top-step))
+                                    boolean)
                                   ,@(insert/prep-pos-step-bilerpers)
                                   )
                              (declare (ignorable x-altmid))
-                             (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot x-altmid))
-                             (declare (type fixnum x-top-step x-bot-step x-maj-step))
                              ,@(insert/declare-pos-step-bilerpers)
 
                              ;; Do top
@@ -814,7 +817,7 @@
                      ;; TODO: find a reasonably accurate algorithm for xctr/yctr
                      (if (> (abs dx) (abs dy))
                        ;; horizontal-major
-                       (let* ((xbeg  (if (< x0 x1) x0 x1))
+                       (fix* ((xbeg  (if (< x0 x1) x0 x1))
                               (xend  (if (< x0 x1) x1 x0))
                               (ybeg  (if (< x0 x1) y0 y1))
                               (yend  (if (< x0 x1) y1 y0))
@@ -825,7 +828,6 @@
                               (ystep (if (< yend ybeg) -1 1))
                               (yctr  0)
                               (y-mid  ybeg))
-                         (declare (type fixnum xbeg xend ybeg yend xlen ylen xlena ylena ystep yctr y-mid))
                          (dotimes (xi (+ xlen 1))
                            (putpixel this (+ xbeg xi) y-mid cd0p)
                            (decf yctr ylena)
@@ -834,7 +836,7 @@
                              (incf y-mid ystep)))))
 
                        ;; vertical-major
-                       (let* ((xbeg  (if (< y0 y1) x0 x1))
+                       (fix* ((xbeg  (if (< y0 y1) x0 x1))
                               (xend  (if (< y0 y1) x1 x0))
                               (ybeg  (if (< y0 y1) y0 y1))
                               (yend  (if (< y0 y1) y1 y0))
@@ -845,7 +847,6 @@
                               (xstep (if (< xend xbeg) -1 1))
                               (xctr  0)
                               (x-mid  xbeg))
-                         (declare (type fixnum ybeg yend xbeg xend ylen xlen ylena xlena xstep xctr x-mid))
                          (dotimes (yi (+ ylen 1))
                            (putpixel this x-mid (+ ybeg yi) cd0p)
                            (decf xctr xlena)
@@ -873,7 +874,7 @@
                      (return-from keep-gp0-buffer nil))
                    ;(format t "rect ~2,'8X wcount=~d~%" ,index ,words-needed)
                    (with-slots (global-texpage) this
-                     (let* ((cd  (aref gp0-buffer ,color-offset))
+                     (fix* ((cd  (aref gp0-buffer ,color-offset))
                             (vd  (aref gp0-buffer ,vertex-offset))
                             (bx  (- (logand (+ vd #x0400) #x07FF) #x0400))
                             (by  (- (logand (+ (ash vd -16) #x0400) #x07FF) #x0400))
@@ -907,19 +908,15 @@
                                       ((2) 8)
                                       ((3) 16)))
                             )
-                       (declare (type fixnum bx by width height))
                        (declare (ignorable cd))
                        (dotimes (yi height)
                          (dotimes (xi width)
-                           (let* ((x (+ xi bx))
+                           (fix* ((x (+ xi bx))
                                   (y (+ yi by))
                                   ,@(when texture-mapped
                                       `((tx (+ xi btx))
                                         (ty (+ yi bty))))
                                   )
-                             (declare (type fixnum x y
-                                            ,@(when texture-mapped `(tx ty))
-                                            ))
                              ,@(cond
                                  ;; TODO: non-raw textures
                                  ;; TODO: hoist this out depending on bpp mode
@@ -983,8 +980,7 @@
     (incf gp0-buffer-length)
     (assert (<= gp0-buffer-length 16))
     ;(format t "GP0: ~8,'0X~%" data)
-    (let* ((command-word (aref gp0-buffer 0)))
-      (declare (type fixnum command-word))
+    (fix* ((command-word (aref gp0-buffer 0)))
       (block keep-gp0-buffer
         (ecase-with-gp0-geometry (logand (ash command-word -24) #xFF)
           ((#x00) nil)   ; NOP
@@ -993,14 +989,13 @@
           ((#x02)  ; Fill Rectangle
            (when (< gp0-buffer-length 3)
              (return-from keep-gp0-buffer nil))
-           (let* ((width   (logand #xFFFF (aref gp0-buffer 2)))
+           (fix* ((width   (logand #xFFFF (aref gp0-buffer 2)))
                   (height  (ash (aref gp0-buffer 2) -16))
                   (base-x  (logand #xFFFF (aref gp0-buffer 1)))
                   (base-y  (ash (aref gp0-buffer 1) -16))
                   (color24 command-word)
                   (color15 (color-24-to-15 color24))
                   )
-             (declare (type fixnum width height base-x base-y color24 color15))
              (setf width  (logand (+ (logand width #x3FF) #x00F) #x3F0))
              (setf height (logand height #x1FF))
              (setf base-x (logand base-x #x3F0))
@@ -1016,13 +1011,12 @@
           ((#x80)  ; Copy Rectangle VRAM to VRAM
            (when (< gp0-buffer-length 4)
              (return-from keep-gp0-buffer nil))
-           (let* ((width  (1+ (logand #x03FF (1- (aref gp0-buffer 3)))))
+           (fix* ((width  (1+ (logand #x03FF (1- (aref gp0-buffer 3)))))
                   (height (1+ (logand #x01FF (1- (ash (aref gp0-buffer 3) -16)))))
                   (sx     (logand #x03FF (aref gp0-buffer 1)))
                   (sy     (ash (aref gp0-buffer 1) -16))
                   (dx     (logand #x01FF (aref gp0-buffer 2)))
                   (dy     (ash (aref gp0-buffer 2) -16)))
-             (declare (type fixnum width height sx sy dx dy))
              (assert (<= 0 sx (+ sx width) 1024))
              (assert (<= 0 sy (+ sy height) 512))
              (dotimes (yi height)
@@ -1264,8 +1258,7 @@
                                                buffer-chunk-size)
                                             :element-type 'unsigned-byte)))
           (labels ((/loop () 
-                     (let* ((pos (read-sequence gpu-data-buffer file)))
-                       (declare (type fixnum pos))
+                     (fix* ((pos (read-sequence gpu-data-buffer file)))
                        (when (/= pos 0)
                          (dotimes (idx (floor (/ pos 5)))
                            (/process (* idx 5)))
@@ -1275,12 +1268,11 @@
                    (/process (offs)
                      (declare (type fixnum offs))
                      (declare (inline))
-                     (let* ((addr (aref gpu-data-buffer (+ offs 0)))
+                     (fix* ((addr (aref gpu-data-buffer (+ offs 0)))
                             (data (logior (ash (aref gpu-data-buffer (+ offs 1))  0)
                                           (ash (aref gpu-data-buffer (+ offs 2))  8)
                                           (ash (aref gpu-data-buffer (+ offs 3)) 16)
                                           (ash (aref gpu-data-buffer (+ offs 4)) 24))))
-                       (declare (type fixnum addr data))
                        (if (= 0 (logand addr #x04))
                          (write-gp0 psgpu data)
                          (write-gp1 psgpu data)))))
