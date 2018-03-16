@@ -351,6 +351,7 @@
     (labels ((/build-geom-body (index)
                (assert (>= index #x20))
                (assert (<= index #x7F))
+               (format t "Building op 0x~2,'0X~%" index)
                (ecase (logand index #xE0)
                  ((#x20) (/draw-poly index))
                  ((#x40) (/draw-line index))
