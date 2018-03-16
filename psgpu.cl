@@ -83,6 +83,52 @@
                 (apply #'/transform x))
             forms)))
 
+(defun insert/prep-pos-step-bilerpers ()
+  (mapcan
+    #'(lambda (sym)
+        (sublis
+          `(($-top      . ,(intern (format nil "~a-TOP" sym)))
+            ($-l-pos    . ,(intern (format nil "~a-L-POS" sym)))
+            ($-r-pos    . ,(intern (format nil "~a-R-POS" sym)))
+            ($-l-step   . ,(intern (format nil "~a-L-STEP" sym)))
+            ($-r-step   . ,(intern (format nil "~a-R-STEP" sym)))
+            ($-maj-step . ,(intern (format nil "~a-MAJ-STEP" sym)))
+            ($-top-step . ,(intern (format nil "~a-TOP-STEP" sym)))
+            )
+        `(($-l-pos  (+ (ash $-top 12) #x0800))
+          ($-r-pos  (+ (ash $-top 12) #x0800))
+          ($-l-step (if left-major $-maj-step $-top-step))
+          ($-r-step (if left-major $-top-step $-maj-step))
+          )))
+    *bilerpers*))
+
+(defun insert/declare-pos-step-bilerpers ()
+  (mapcan
+    #'(lambda (sym)
+        (sublis
+          `(($-l-pos    . ,(intern (format nil "~a-L-POS" sym)))
+            ($-r-pos    . ,(intern (format nil "~a-R-POS" sym)))
+            ($-l-step   . ,(intern (format nil "~a-L-STEP" sym)))
+            ($-r-step   . ,(intern (format nil "~a-R-STEP" sym)))
+            )
+        `((declare (type fixnum $-l-pos $-r-pos $-l-step $-r-step))
+          )))
+    *bilerpers*))
+
+(defun insert/snap-bilerpers-halfway (dir)
+  (mapcan
+    #'(lambda (sym)
+        (sublis
+          `(($-*-pos    . ,(intern (format nil "~a-~a-POS" sym dir)))
+            ($-*-step   . ,(intern (format nil "~a-~a-STEP" sym dir)))
+            ($-mid      . ,(intern (format nil "~a-MID" sym)))
+            ($-bot-step . ,(intern (format nil "~a-BOT-STEP" sym)))
+            )
+        `((setf $-*-pos  (+ (ash $-mid 12) #x0800))
+          (setf $-*-step $-bot-step)
+          )))
+    *bilerpers*))
+
 (defun insert/increment-bilerpers-x ()
   (mapcan
     #'(lambda (sym)
@@ -388,7 +434,6 @@
                       (texcoord-step    (+ args-per-point
                                            (if gouraud-shaded 1 0)))
                       )
-                 (declare (ignore raw-textured))
                  (labels
                    ((/draw-poly-half (upper-y lower-y)
                       `((dotimes (yi (- ,lower-y ,upper-y))
@@ -459,11 +504,13 @@
                             ,@(lets-for-triangle
                                 (x vd (- (logand (+ $x #x0400) #x07FF) #x0400))
                                 (y vd (- (logand (+ (ash $x -16) #x0400) #x07FF) #x0400)))
-                            (cd0 (aref gp0-buffer ,(+ color-offset  (* color-step  0))))
+                            (cd0 ,(if raw-textured
+                                     #x808080
+                                     `(aref gp0-buffer ,(+ color-offset  (* color-step  0)))))
                             ,@(unless (or texture-mapped gouraud-shaded t)
                               `(
                                 (cd0p (color-24-to-15 cd0))))
-                            ,@(when gouraud-shaded
+                            ,@(if (and gouraud-shaded (not raw-textured))
                                 `(
                                   (cd1 (aref gp0-buffer ,(+ color-offset  (* color-step  1))))
                                   (cd2 (aref gp0-buffer ,(+ color-offset  (* color-step  2))))
@@ -472,8 +519,7 @@
                                       (cg cd (logand #xFF (ash $x  -8)))
                                       (cb cd (logand #xFF (ash $x -16)))
                                       )
-                                  ))
-                            ,@(unless gouraud-shaded
+                                  )
                                 `(
                                   (cd1 cd0)
                                   (cd2 cd0)
@@ -595,48 +641,12 @@
                                   (if (= y-top y-mid)
                                     (> x-maj-step x-bot-step)
                                     (< x-maj-step x-top-step)))
-                                (x-l-pos  (+ (ash x-top 12) #x0800))
-                                (x-r-pos  (+ (ash x-top 12) #x0800))
-                                (x-l-step (if left-major x-maj-step x-top-step))
-                                (x-r-step (if left-major x-top-step x-maj-step))
-                                ,@(when (or t gouraud-shaded)
-                                    `((cr-l-pos  (+ (ash cr-top 12) #x0800))
-                                      (cr-r-pos  (+ (ash cr-top 12) #x0800))
-                                      (cr-l-step (if left-major cr-maj-step cr-top-step))
-                                      (cr-r-step (if left-major cr-top-step cr-maj-step))
-                                      (cg-l-pos  (+ (ash cg-top 12) #x0800))
-                                      (cg-r-pos  (+ (ash cg-top 12) #x0800))
-                                      (cg-l-step (if left-major cg-maj-step cg-top-step))
-                                      (cg-r-step (if left-major cg-top-step cg-maj-step))
-                                      (cb-l-pos  (+ (ash cb-top 12) #x0800))
-                                      (cb-r-pos  (+ (ash cb-top 12) #x0800))
-                                      (cb-l-step (if left-major cb-maj-step cb-top-step))
-                                      (cb-r-step (if left-major cb-top-step cb-maj-step))
-                                      ))
-                                ,@(when texture-mapped
-                                    `((s-l-pos  (+ (ash s-top 12) #x0800))
-                                      (s-r-pos  (+ (ash s-top 12) #x0800))
-                                      (s-l-step (if left-major s-maj-step s-top-step))
-                                      (s-r-step (if left-major s-top-step s-maj-step))
-                                      (t-l-pos  (+ (ash t-top 12) #x0800))
-                                      (t-r-pos  (+ (ash t-top 12) #x0800))
-                                      (t-l-step (if left-major t-maj-step t-top-step))
-                                      (t-r-step (if left-major t-top-step t-maj-step))
-                                      ))
+                                ,@(insert/prep-pos-step-bilerpers)
                                 )
                            (declare (ignorable x-altmid))
                            (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot x-altmid))
                            (declare (type fixnum x-top-step x-bot-step x-maj-step))
-                           (declare (type fixnum x-l-pos x-r-pos x-l-step x-r-step))
-                           ,@(when (or t gouraud-shaded)
-                               `((declare (type fixnum cr-l-pos cr-r-pos cr-l-step cr-r-step))
-                                 (declare (type fixnum cg-l-pos cg-r-pos cg-l-step cg-r-step))
-                                 (declare (type fixnum cb-l-pos cb-r-pos cb-l-step cb-r-step))
-                                 ))
-                           ,@(when texture-mapped
-                               `((declare (type fixnum s-l-pos s-r-pos s-l-step s-r-step))
-                                 (declare (type fixnum t-l-pos t-r-pos t-l-step t-r-step))
-                                 ))
+                           ,@(insert/declare-pos-step-bilerpers)
 
                            ;; Do top
                            ,@(/draw-poly-half 'y-top 'y-mid)
@@ -644,44 +654,10 @@
                            ;; Snap minor
                            (if left-major
                              (progn
-                               (setf x-r-pos  (+ (ash x-mid 12) #x0800))
-                               (setf x-r-step x-bot-step)
-                               ,@(when (or t gouraud-shaded)
-                                   `(;
-                                     (setf cr-r-pos  (+ (ash cr-mid 12) #x0800))
-                                     (setf cr-r-step cr-bot-step)
-                                     (setf cg-r-pos  (+ (ash cg-mid 12) #x0800))
-                                     (setf cg-r-step cg-bot-step)
-                                     (setf cb-r-pos  (+ (ash cb-mid 12) #x0800))
-                                     (setf cb-r-step cb-bot-step)
-                                     ))
-                               ,@(when texture-mapped
-                                   `(;
-                                     (setf s-r-pos  (+ (ash s-mid 12) #x0800))
-                                     (setf s-r-step s-bot-step)
-                                     (setf t-r-pos  (+ (ash t-mid 12) #x0800))
-                                     (setf t-r-step t-bot-step)
-                                     ))
+                               ,@(insert/snap-bilerpers-halfway "R")
                                )
                              (progn
-                               (setf x-l-pos  (+ (ash x-mid 12) #x0800))
-                               (setf x-l-step x-bot-step)
-                               ,@(when (or t gouraud-shaded)
-                                   `(;
-                                     (setf cr-l-pos  (+ (ash cr-mid 12) #x0800))
-                                     (setf cr-l-step cr-bot-step)
-                                     (setf cg-l-pos  (+ (ash cg-mid 12) #x0800))
-                                     (setf cg-l-step cg-bot-step)
-                                     (setf cb-l-pos  (+ (ash cb-mid 12) #x0800))
-                                     (setf cb-l-step cb-bot-step)
-                                     ))
-                               ,@(when texture-mapped
-                                   `(;
-                                     (setf s-l-pos  (+ (ash s-mid 12) #x0800))
-                                     (setf s-l-step s-bot-step)
-                                     (setf t-l-pos  (+ (ash t-mid 12) #x0800))
-                                     (setf t-l-step t-bot-step)
-                                     ))
+                               ,@(insert/snap-bilerpers-halfway "L")
                                ))
 
                            ;; Do bottom
@@ -1213,7 +1189,8 @@
                             :w 1024 :h (* 3 224)
                             )
     (sdl2:with-renderer (renderer window :flags '(:accelerated))
-      (with-open-file (file "spyro3gameplay.gpudump"
+      (with-open-file (file ;"psxgpudump.bin"
+                            "spyro3gameplay.gpudump"
                             :direction :input
                             :element-type 'unsigned-byte)
         (let* ((psgpu (make-psgpu))
@@ -1226,6 +1203,7 @@
                (*screen-renderer* renderer)
                (*screen-window* window)
                (buffer-chunk-count 4096)
+               ;(buffer-chunk-count 1)
                (buffer-chunk-size 5)
                (gpu-data-buffer (make-array (* buffer-chunk-count
                                                buffer-chunk-size)
