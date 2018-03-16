@@ -440,7 +440,6 @@
                           (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
                                  (x-r-pixel (min 1023 clamp-x2 (ash x-r-pos -12)))
                                  (y-pixel (+ ,upper-y yi))
-                                 ;; TODO: get a constant horizontal delta
                                  ,@(insert/bilerper-lets-y-start)
                                  )
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
@@ -469,7 +468,6 @@
                                         (declare (type fixnum cd0p))
 
                                         ;; TODO: mask-bit setting
-                                        ;; TODO: non-half-blend translucency
                                         (when (/= 0 pixdata)
                                           ,@(if semi-transparent
                                               `((if (>= pixdata #x8000)
@@ -551,7 +549,7 @@
                                     (convert-texpage-pointer
                                       texpage))))
                             )
-                       (declare (ignorable cd0))
+                       ;(declare (ignorable cd0))
                        (declare (type fixnum x0 y0 x1 y1 x2 y2))
 
                        ;; TODO: cancel oversized polys
@@ -937,7 +935,7 @@
           ((#x00) nil)   ; NOP
           ((#x01) nil)   ; TODO: Clear cache
 
-          ((#x02)  ; TODO: Fill Rectangle
+          ((#x02)  ; Fill Rectangle
            (when (< gp0-buffer-length 3)
              (return-from keep-gp0-buffer nil))
            (let* ((width   (logand #xFFFF (aref gp0-buffer 2)))
@@ -960,16 +958,25 @@
                                      color15)))
              ))
 
-          ((#x80)  ; TODO: Copy Rectangle VRAM to VRAM
+          ((#x80)  ; Copy Rectangle VRAM to VRAM
            (when (< gp0-buffer-length 4)
              (return-from keep-gp0-buffer nil))
-           (let* ((width  (logand #xFFFF (aref gp0-buffer 3)))
-                  (height (ash (aref gp0-buffer 3) -16)))
-             (declare (ignore width height))
-             ;; TODO!
+           (let* ((width  (1+ (logand #x03FF (1- (aref gp0-buffer 3)))))
+                  (height (1+ (logand #x01FF (1- (ash (aref gp0-buffer 3) -16)))))
+                  (sx     (logand #x03FF (aref gp0-buffer 1)))
+                  (sy     (ash (aref gp0-buffer 1) -16))
+                  (dx     (logand #x01FF (aref gp0-buffer 2)))
+                  (dy     (ash (aref gp0-buffer 2) -16)))
+             (declare (type fixnum width height sx sy dx dy))
+             (assert (<= 0 sx (+ sx width) 1024))
+             (assert (<= 0 sy (+ sy height) 512))
+             (dotimes (yi height)
+               (dotimes (xi width)
+                 (setf (aref vram (+ dx xi (* 1024 (+ dy yi))))
+                       (aref vram (+ sx xi (* 1024 (+ sy yi)))))))
              ))
 
-          ((#xA0)  ; TODO: Copy Rectangle CPU to VRAM
+          ((#xA0)  ; Copy Rectangle CPU to VRAM
            (when (< gp0-buffer-length 3)
              (return-from keep-gp0-buffer nil))
            (with-slots (transfer-halfwords-in
@@ -1014,19 +1021,11 @@
                (assert (>= transfer-halfwords-in 0))
                (return-from keep-gp0-buffer nil))))
 
-          ((#xC0)  ; TODO: Copy Rectangle VRAM to VRAM
-           (when (< gp0-buffer-length 4)
-             (return-from keep-gp0-buffer nil))
-           (let* ((width  (logand #xFFFF (aref gp0-buffer 3)))
-                  (height (ash (aref gp0-buffer 3) -16))
-                  (sx     (logand #xFFFF (aref gp0-buffer 1)))
-                  (sy     (ash (aref gp0-buffer 1) -16))
-                  (dx     (logand #xFFFF (aref gp0-buffer 2)))
-                  (dy     (ash (aref gp0-buffer 2) -16)))
-             (declare (ignore width height))
-             (declare (ignore sx sy dx dy))
-             ;; TODO!
-             ))
+          ((#xC0)  ; TODO: Copy Rectangle VRAM to CPU
+             (when (< gp0-buffer-length 3)
+               (return-from keep-gp0-buffer nil))
+             ; TODO!
+             )
 
           ((#xE1)   ; Texpage
            (with-slots (global-texpage) this
@@ -1190,7 +1189,8 @@
                             )
     (sdl2:with-renderer (renderer window :flags '(:accelerated))
       (with-open-file (file ;"psxgpudump.bin"
-                            "spyro3gameplay.gpudump"
+                            "gt1gameplay.gpudump"
+                            ;"spyro3gameplay.gpudump"
                             :direction :input
                             :element-type 'unsigned-byte)
         (let* ((psgpu (make-psgpu))
