@@ -275,6 +275,33 @@
                  ((#x40) (/draw-line index))
                  ((#x60) (/draw-rect index))))
 
+             (/get-texture ()
+               `(let* ((pixelpos
+                         (ecase texbpp
+                           ((4)
+                              (+ clutref
+                                 (logand #x000F
+                                   (ash (aref vram
+                                          ;; FIXME: range is busted
+                                          (logand
+                                            #x7FFFF
+                                            (+ texref
+                                               (ash tx -2)
+                                               (* ty 1024))))
+                                        (* -4 (logand #x3 tx))))))
+                           ((8)
+                              (+ clutref
+                                 (logand #x00FF
+                                   (ash (aref vram
+                                          (logand
+                                            #x7FFFF
+                                            (+ texref
+                                               (ash tx -1)
+                                               (* ty 1024))))
+                                        (* -8 (logand #x1 tx))))))
+                           ((15) (+ tx (* ty 1024))))))
+                  (aref vram (logand #x7FFFF pixelpos))))
+
              (/draw-poly (index)
                (let* ((raw-textured     (= #x05 (logand index #x05)))
                       (semi-transparent (/= 0 (logand index #x02)))
@@ -299,22 +326,7 @@
                       )
                  (declare (ignore semi-transparent raw-textured))
                  (labels
-                   ((/draw-poly-half-flat (upper-y lower-y)
-                      `((dotimes (yi (- ,lower-y ,upper-y))
-                          (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
-                                 (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
-                                 (y-pixel (+ ,upper-y yi)))
-                            (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
-                            (assert (and (<= 0 y-pixel 511)
-                                         (<= clamp-y1 y-pixel clamp-y2)))
-                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
-                              (declare (type fixnum ibase))
-                              (dotimes (xi (- x-r-pixel x-l-pixel))
-                                (setf (aref vram (+ ibase xi)) cd0p))))
-                          (incf x-l-pos x-l-step)
-                          (incf x-r-pos x-r-step))))
-
-                    (/draw-poly-half-rawtex (upper-y lower-y)
+                   ((/draw-poly-half-rawtex-or-flat (upper-y lower-y)
                       `((dotimes (yi (- ,lower-y ,upper-y))
                           (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
                                  (x-r-pixel (min 1024 clamp-x2 (ash x-r-pos -12)))
@@ -328,40 +340,17 @@
                             (let* ((ibase (+ x-l-pixel (* y-pixel 1024))))
                               (declare (type fixnum ibase))
                               (dotimes (xi (- x-r-pixel x-l-pixel))
-                                (let* ((tx (ash s-pos -12))
-                                       (ty (ash t-pos -12))
-                                       (pixelpos
-                                         (ecase texbpp
-                                           ((4)
-                                              (+ clutref
-                                                 (logand #x000F
-                                                   (ash (aref vram
-                                                          ;; FIXME: range is busted
-                                                          (logand
-                                                            #x7FFFF
-                                                            (+ texref
-                                                               (ash tx -2)
-                                                               (* ty 1024))))
-                                                        (* -4 (logand #x3 tx))))))
-                                           ((8)
-                                              (+ clutref
-                                                 (logand #x00FF
-                                                   (ash (aref vram
-                                                          (logand
-                                                            #x7FFFF
-                                                            (+ texref
-                                                               (ash tx -1)
-                                                               (* ty 1024))))
-                                                        (* -8 (logand #x1 tx))))))
-                                           ((15) (+ tx (* ty 1024)))))
-                                       (pixeldata (aref vram
-                                                        (logand #x7FFFF pixelpos))))
-                                  (when (/= 0 pixeldata)
-                                    (setf (aref vram (+ ibase xi)) pixeldata))
-                                  ;(incf s-pos s-locstep)
-                                  ;(incf t-pos t-locstep)
-                                  ,@(insert/increment-bilerpers-x)
-                                  )))
+                                ,@(if texture-mapped
+                                    `((let* ((tx (ash s-pos -12))
+                                             (ty (ash t-pos -12))
+                                             (pixeldata ,(/get-texture)))
+                                        (when (/= 0 pixeldata)
+                                          (setf (aref vram (+ ibase xi)) pixeldata))))
+                                    `((setf (aref vram (+ ibase xi)) cd0p)))
+                                ;(incf s-pos s-locstep)
+                                ;(incf t-pos t-locstep)
+                                ,@(insert/increment-bilerpers-x)
+                                ))
                           ,@(insert/increment-bilerpers-y)
                           ))))
 
@@ -406,13 +395,10 @@
 
                     (/draw-poly-half (upper-y lower-y)
                       (cond
-                        (texture-mapped
-                          ;; TODO!
-                          (/draw-poly-half-rawtex  upper-y lower-y))
-                        (gouraud-shaded
+                        ((and gouraud-shaded (not texture-mapped))
                           (/draw-poly-half-gouraud upper-y lower-y))
                         (t
-                          (/draw-poly-half-flat    upper-y lower-y))))
+                          (/draw-poly-half-rawtex-or-flat upper-y lower-y))))
                     )
 
                    ;;
@@ -850,26 +836,7 @@
                                  ;; TODO: non-raw textures
                                  ;; TODO: hoist this out depending on bpp mode
                                  (texture-mapped
-                                   `((let* ((pixelpos
-                                              (ecase texbpp
-                                                ((4)
-                                                   (+ clutref
-                                                      (logand #x000F
-                                                        (ash (aref vram
-                                                               (+ texref
-                                                                  (ash tx -2)
-                                                                  (* ty 1024)))
-                                                             (* -4 (logand #x3 tx))))))
-                                                ((8)
-                                                   (+ clutref
-                                                      (logand #x00FF
-                                                        (ash (aref vram
-                                                               (+ texref
-                                                                  (ash tx -1)
-                                                                  (* ty 1024)))
-                                                             (* -8 (logand #x1 tx))))))
-                                                ((15) (+ tx (* ty 1024)))))
-                                            (pixeldata (aref vram pixelpos)))
+                                   `((let* ((pixeldata ,(/get-texture)))
                                        (when (/= 0 pixeldata)
                                          (putpixel this x y pixeldata)))))
                                  (t
