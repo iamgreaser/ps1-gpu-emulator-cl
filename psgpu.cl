@@ -437,57 +437,63 @@
                  (labels
                    ((/draw-poly-half (upper-y lower-y)
                       `((dotimes (yi (- ,lower-y ,upper-y))
-                          (let* ((x-l-pixel (max 0 clamp-x1 (ash x-l-pos -12)))
-                                 (x-r-pixel (min 1023 clamp-x2 (ash x-r-pos -12)))
+                          (let* ((x-l-effpixel (ash x-l-pos -12))
+                                 (x-r-effpixel (ash x-r-pos -12))
+                                 (x-l-pixel (max 0    clamp-x1 x-l-effpixel))
+                                 (x-r-pixel (min 1023 clamp-x2 x-r-effpixel))
                                  (y-pixel (+ ,upper-y yi))
                                  ,@(insert/bilerper-lets-y-start)
                                  )
                             (declare (type fixnum x-l-pixel x-r-pixel y-pixel))
                             ,@(insert/bilerper-declares-y-start)
-                            (assert (and (<= 0 y-pixel 511)
-                                         (<= clamp-y1 y-pixel clamp-y2)))
-                            (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
-                                   )
-                              (declare (type fixnum ibase))
-                              (dotimes (xi (- x-r-pixel x-l-pixel))
-                                ,@(if texture-mapped
-                                    `((let* ((tx (ash s-pos -12))
-                                             (ty (ash t-pos -12))
-                                             (pixdata ,(/get-texture))
-                                             (tex-r (logand #x1F (ash pixdata   0)))
-                                             (tex-g (logand #x1F (ash pixdata  -5)))
-                                             (tex-b (logand #x1F (ash pixdata -10)))
-                                             (cd0p ,(/converting-24-to-15
-                                                      '(min #xFF (ash (* (ash cr-pos -12)
-                                                                         tex-r) -4))
-                                                      '(min #xFF (ash (* (ash cg-pos -12)
-                                                                         tex-g) -4))
-                                                      '(min #xFF (ash (* (ash cb-pos -12)
-                                                                         tex-b) -4)))))
-                                        ;
-                                        (declare (type fixnum cd0p))
+                            (when (<= clamp-y1 y-pixel clamp-y2)
+                              ;
+                              (assert (and (<= 0 y-pixel 511)
+                                           (<= clamp-y1 y-pixel clamp-y2)))
+                              (let* ((ibase (+ x-l-pixel (* y-pixel 1024)))
+                                     )
+                                (declare (type fixnum ibase))
+                                (dotimes (xi (- x-r-pixel x-l-pixel))
+                                  (assert (and (<= 0 (+ x-l-pixel xi) 1023)
+                                               (<= clamp-x1 (+ x-l-pixel xi) clamp-x2)))
+                                  ,@(if texture-mapped
+                                      `((let* ((tx (ash s-pos -12))
+                                               (ty (ash t-pos -12))
+                                               (pixdata ,(/get-texture))
+                                               (tex-r (logand #x1F (ash pixdata   0)))
+                                               (tex-g (logand #x1F (ash pixdata  -5)))
+                                               (tex-b (logand #x1F (ash pixdata -10)))
+                                               (cd0p ,(/converting-24-to-15
+                                                        '(min #xFF (ash (* (ash cr-pos -12)
+                                                                           tex-r) -4))
+                                                        '(min #xFF (ash (* (ash cg-pos -12)
+                                                                           tex-g) -4))
+                                                        '(min #xFF (ash (* (ash cb-pos -12)
+                                                                           tex-b) -4)))))
+                                          ;
+                                          (declare (type fixnum cd0p))
 
-                                        ;; TODO: mask-bit setting
-                                        (when (/= 0 pixdata)
+                                          ;; TODO: mask-bit setting
+                                          (when (/= 0 pixdata)
+                                            ,@(if semi-transparent
+                                                `((if (>= pixdata #x8000)
+                                                    ;; Semi-transparent
+                                                    ,@(/semi-transparent-blend 'texpage)
+                                                    ;; Non-translucent
+                                                    (setf (aref vram (+ ibase xi)) cd0p)))
+                                                `((setf (aref vram (+ ibase xi)) cd0p))))
+                                          ))
+                                      `((let* ((cd0p ,(/converting-24-to-15
+                                                        '(ash cr-pos -12)
+                                                        '(ash cg-pos -12)
+                                                        '(ash cb-pos -12))))
+                                          ;
+                                          (declare (type fixnum cd0p))
                                           ,@(if semi-transparent
-                                              `((if (>= pixdata #x8000)
-                                                  ;; Semi-transparent
-                                                  ,@(/semi-transparent-blend 'texpage)
-                                                  ;; Non-translucent
-                                                  (setf (aref vram (+ ibase xi)) cd0p)))
-                                              `((setf (aref vram (+ ibase xi)) cd0p))))
-                                        ))
-                                    `((let* ((cd0p ,(/converting-24-to-15
-                                                      '(ash cr-pos -12)
-                                                      '(ash cg-pos -12)
-                                                      '(ash cb-pos -12))))
-                                        ;
-                                        (declare (type fixnum cd0p))
-                                        ,@(if semi-transparent
-                                            `(,@(/semi-transparent-blend 'global-texpage))
-                                            `((setf (aref vram (+ ibase xi)) cd0p)))
-                                        )))
-                                ,@(insert/increment-bilerpers-x))))
+                                              `(,@(/semi-transparent-blend 'global-texpage))
+                                              `((setf (aref vram (+ ibase xi)) cd0p)))
+                                          )))
+                                  ,@(insert/increment-bilerpers-x)))))
                           ,@(insert/increment-bilerpers-y)
                           )))
                     )
@@ -552,8 +558,6 @@
                        ;(declare (ignorable cd0))
                        (declare (type fixnum x0 y0 x1 y1 x2 y2))
 
-                       ;; TODO: cancel oversized polys
-
                        (with-slots (clamp-x1 clamp-y1
                                     clamp-x2 clamp-y2
                                     offs-x offs-y
@@ -565,103 +569,104 @@
                          (incf y1 offs-y)
                          (incf y2 offs-y)
 
-                         ;; TODO: actually clip instead of min/max
-                         (setf x0 (max clamp-x1 (min clamp-x2 x0)))
-                         (setf x1 (max clamp-x1 (min clamp-x2 x1)))
-                         (setf x2 (max clamp-x1 (min clamp-x2 x2)))
-                         (setf y0 (max clamp-y1 (min clamp-y2 y0)))
-                         (setf y1 (max clamp-y1 (min clamp-y2 y1)))
-                         (setf y2 (max clamp-y1 (min clamp-y2 y2)))
+                         ;; Ensure poly is not oversized
+                         ;; TODO: apply this to lines and rects too
+                         (when (and (<= (- (max x0 x1 x2)
+                                           (min x0 x1 x2))
+                                        1023)
+                                    (<= (- (max y0 y1 y2)
+                                           (min y0 y1 y2))
+                                        511))
 
-                         ;; Order such that (<= y0 y1 y2)
-                         ;; Stoogesort is definitely worthwhile here
-                         (when (< y2 y1)
-                           (swap-pair x1 x2)
-                           ,@(when gouraud-shaded
-                               `((swap-pair cr1 cr2)
-                                 (swap-pair cg1 cg2)
-                                 (swap-pair cb1 cb2)
+                           ;; Order such that (<= y0 y1 y2)
+                           ;; Stoogesort is definitely worthwhile here
+                           (when (< y2 y1)
+                             (swap-pair x1 x2)
+                             ,@(when gouraud-shaded
+                                 `((swap-pair cr1 cr2)
+                                   (swap-pair cg1 cg2)
+                                   (swap-pair cb1 cb2)
+                                   ))
+                             ,@(when texture-mapped
+                                 `((swap-pair s1 s2)
+                                   (swap-pair t1 t2)))
+                             (swap-pair y1 y2)
+                             )
+                           (when (< y1 y0)
+                             (swap-pair x0 x1)
+                             ,@(when gouraud-shaded
+                                 `((swap-pair cr0 cr1)
+                                   (swap-pair cg0 cg1)
+                                   (swap-pair cb0 cb1)
+                                   ))
+                             ,@(when texture-mapped
+                                 `((swap-pair s0 s1)
+                                   (swap-pair t0 t1)))
+                             (swap-pair y0 y1)
+                             )
+                           (when (< y2 y1)
+                             (swap-pair x1 x2)
+                             ,@(when gouraud-shaded
+                                 `((swap-pair cr1 cr2)
+                                   (swap-pair cg1 cg2)
+                                   (swap-pair cb1 cb2)
+                                   ))
+                             ,@(when texture-mapped
+                                 `((swap-pair s1 s2)
+                                   (swap-pair t1 t2)))
+                             (swap-pair y1 y2)
+                             )
+
+                           (assert (<= y0 y1 y2))
+
+                           (let* ((y-top y0)
+                                  (y-bot y2)
+                                  (y-mid y1)
+                                  ,@(lets-for-lerp-steps-1
+                                      '(x x0 x1 x2))
+
+                                  ,@(when (or t gouraud-shaded)
+                                      `(,@(lets-for-lerp-steps-1
+                                            '(cr cr0 cr1 cr2)
+                                            '(cg cg0 cg1 cg2)
+                                            '(cb cb0 cb1 cb2)
+                                            )
+                                        ))
+
+                                  ,@(when texture-mapped
+                                      `(,@(lets-for-lerp-steps-1
+                                            '(s s0 s1 s2)
+                                            '(t t0 t1 t2)
+                                            )
+                                        ))
+
+                                  (left-major
+                                    (if (= y-top y-mid)
+                                      (> x-maj-step x-bot-step)
+                                      (< x-maj-step x-top-step)))
+                                  ,@(insert/prep-pos-step-bilerpers)
+                                  )
+                             (declare (ignorable x-altmid))
+                             (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot x-altmid))
+                             (declare (type fixnum x-top-step x-bot-step x-maj-step))
+                             ,@(insert/declare-pos-step-bilerpers)
+
+                             ;; Do top
+                             ,@(/draw-poly-half 'y-top 'y-mid)
+
+                             ;; Snap minor
+                             (if left-major
+                               (progn
+                                 ,@(insert/snap-bilerpers-halfway "R")
+                                 )
+                               (progn
+                                 ,@(insert/snap-bilerpers-halfway "L")
                                  ))
-                           ,@(when texture-mapped
-                               `((swap-pair s1 s2)
-                                 (swap-pair t1 t2)))
-                           (swap-pair y1 y2)
-                           )
-                         (when (< y1 y0)
-                           (swap-pair x0 x1)
-                           ,@(when gouraud-shaded
-                               `((swap-pair cr0 cr1)
-                                 (swap-pair cg0 cg1)
-                                 (swap-pair cb0 cb1)
-                                 ))
-                           ,@(when texture-mapped
-                               `((swap-pair s0 s1)
-                                 (swap-pair t0 t1)))
-                           (swap-pair y0 y1)
-                           )
-                         (when (< y2 y1)
-                           (swap-pair x1 x2)
-                           ,@(when gouraud-shaded
-                               `((swap-pair cr1 cr2)
-                                 (swap-pair cg1 cg2)
-                                 (swap-pair cb1 cb2)
-                                 ))
-                           ,@(when texture-mapped
-                               `((swap-pair s1 s2)
-                                 (swap-pair t1 t2)))
-                           (swap-pair y1 y2)
-                           )
 
-                         (assert (<= y0 y1 y2))
+                             ;; Do bottom
+                             ,@(/draw-poly-half 'y-mid 'y-bot)
 
-                         (let* ((y-top y0)
-                                (y-bot y2)
-                                (y-mid y1)
-                                ,@(lets-for-lerp-steps-1
-                                    '(x x0 x1 x2))
-
-                                ,@(when (or t gouraud-shaded)
-                                    `(,@(lets-for-lerp-steps-1
-                                          '(cr cr0 cr1 cr2)
-                                          '(cg cg0 cg1 cg2)
-                                          '(cb cb0 cb1 cb2)
-                                          )
-                                      ))
-
-                                ,@(when texture-mapped
-                                    `(,@(lets-for-lerp-steps-1
-                                          '(s s0 s1 s2)
-                                          '(t t0 t1 t2)
-                                          )
-                                      ))
-
-                                (left-major
-                                  (if (= y-top y-mid)
-                                    (> x-maj-step x-bot-step)
-                                    (< x-maj-step x-top-step)))
-                                ,@(insert/prep-pos-step-bilerpers)
-                                )
-                           (declare (ignorable x-altmid))
-                           (declare (type fixnum y-top y-mid y-bot x-top x-mid x-bot x-altmid))
-                           (declare (type fixnum x-top-step x-bot-step x-maj-step))
-                           ,@(insert/declare-pos-step-bilerpers)
-
-                           ;; Do top
-                           ,@(/draw-poly-half 'y-top 'y-mid)
-
-                           ;; Snap minor
-                           (if left-major
-                             (progn
-                               ,@(insert/snap-bilerpers-halfway "R")
-                               )
-                             (progn
-                               ,@(insert/snap-bilerpers-halfway "L")
-                               ))
-
-                           ;; Do bottom
-                           ,@(/draw-poly-half 'y-mid 'y-bot)
-
-                           )))
+                             ))))
 
                      ;; Convert quads to tris
 
@@ -1189,8 +1194,8 @@
                             )
     (sdl2:with-renderer (renderer window :flags '(:accelerated))
       (with-open-file (file ;"psxgpudump.bin"
-                            "gt1gameplay.gpudump"
-                            ;"spyro3gameplay.gpudump"
+                            ;"gt1gameplay.gpudump"
+                            "spyro3gameplay.gpudump"
                             :direction :input
                             :element-type 'unsigned-byte)
         (let* ((psgpu (make-psgpu))
