@@ -24,20 +24,21 @@
      ,@body))
 
 (defmacro fix* (vars &body body)
-  `(let* ,(mapcar #'(lambda (pair)
-                      (if (= (length pair) 2)
-                        (destructuring-bind (name value) pair
-                          `(,name (the fixnum ,value))
-                          )
+  (let* ((base-type 'fixnum))
+    `(let* ,(mapcar #'(lambda (pair)
+                        (if (= (length pair) 2)
+                          (destructuring-bind (name value) pair
+                            `(,name (the ,base-type ,value))
+                            )
 
-                        `(,(first pair) ,(second pair))))
-                  vars)
-     (declare (type fixnum
-                    ,@(mapcar #'first
-                        (remove-if-not
-                          #'(lambda (pair) (= (length pair) 2))
-                          vars))))
-     ,@body))
+                          `(,(first pair) (the ,(third pair) ,(second pair)))))
+                    vars)
+       (declare (type ,base-type
+                      ,@(mapcar #'first
+                          (remove-if-not
+                            #'(lambda (pair) (= (length pair) 2))
+                            vars))))
+       ,@body)))
 
 
 (defmacro lets-for-triangle (&body forms)
@@ -119,19 +120,6 @@
           )))
     *bilerpers*))
 
-(defun insert/declare-pos-step-bilerpers ()
-  (mapcan
-    #'(lambda (sym)
-        (sublis
-          `(($-l-pos    . ,(intern (format nil "~a-L-POS" sym)))
-            ($-r-pos    . ,(intern (format nil "~a-R-POS" sym)))
-            ($-l-step   . ,(intern (format nil "~a-L-STEP" sym)))
-            ($-r-step   . ,(intern (format nil "~a-R-STEP" sym)))
-            )
-        `(;(declare (type fixnum $-l-pos $-r-pos $-l-step $-r-step))
-          )))
-    *bilerpers*))
-
 (defun insert/snap-bilerpers-halfway (dir)
   (mapcan
     #'(lambda (sym)
@@ -183,24 +171,6 @@
             ($-locstep . ,(intern (format nil "~a-LOCSTEP" sym)))
             )
         `(($-pos     $-l-pos))))
-    (remove-if
-      #'(lambda (x) (eql x 'x))
-      *bilerpers*)))
-
-(defun insert/bilerper-declares-y-start ()
-  (mapcar
-    #'(lambda (sym)
-        (list
-          'declare
-          (list
-            'type
-            'fixnum
-            (intern (format nil "~a-POS" sym))
-            (intern (format nil "~a-L-POS" sym))
-            (intern (format nil "~a-R-POS" sym))
-            ;(intern (format nil "~a-SPAN" sym))
-            ;(intern (format nil "~a-LOCSTEP" sym))
-            )))
     (remove-if
       #'(lambda (x) (eql x 'x))
       *bilerpers*)))
@@ -463,7 +433,7 @@
                                                (ash tx -1)
                                                (* ty 1024))))
                                         (* -8 (logand #x1 tx))))))
-                           ((15) (+ tx (* ty 1024))))))
+                           ((15) (+ texref tx (* ty 1024))))))
                   (aref vram (logand #x7FFFF pixelpos))))
 
              (/draw-poly (index)
@@ -500,7 +470,6 @@
                                  (y-pixel (+ (max ,upper-y clamp-y1) yi))
                                  ,@(insert/bilerper-lets-y-start)
                                  )
-                            ,@(insert/bilerper-declares-y-start)
                             ,@(insert/increment-bilerpers-x-leftclamp)
                             (assert (and (<= 0 y-pixel 511)
                                          (<= clamp-y1 y-pixel clamp-y2)))
@@ -703,7 +672,6 @@
                                   ,@(insert/prep-pos-step-bilerpers)
                                   )
                              (declare (ignorable x-altmid))
-                             ,@(insert/declare-pos-step-bilerpers)
 
                              ;; Do top
                              ,@(/draw-poly-half 'y-top 'y-mid)
@@ -929,14 +897,14 @@
                        (assert (<= 0 clamp-y1 clipped-y1))
                        (assert (<= clipped-y2 (1+ clamp-y2) 512))
 
-                       (dotimes (yi height)
-                         (fix* ((yi (+ yi (- clipped-y1 by)))
+                       (dotimes (ryi height)
+                         (fix* ((yi (+ ryi (- clipped-y1 by)))
                                 (ibase (+ bx (* 1024 (+ by yi)))))
-                           (dotimes (xi width)
-                             (fix* ((xi (+ xi (- clipped-x1 bx)))
+                           (dotimes (rxi width)
+                             (fix* ((xi (+ rxi (- clipped-x1 bx)))
                                     ,@(when texture-mapped
-                                        `((tx (+ xi btx))
-                                          (ty (+ yi bty))))
+                                        `((tx (logand #xFF (+ xi btx)))
+                                          (ty (logand #xFF (+ yi bty)))))
                                     )
                                ,@(cond
                                    (raw-textured
@@ -1063,6 +1031,9 @@
                   (dy     (ash (aref gp0-buffer 2) -16)))
              (assert (<= 0 sx (+ sx width) 1024))
              (assert (<= 0 sy (+ sy height) 512))
+             (assert (<= 0 dx (+ dx width) 1024))
+             (assert (<= 0 dy (+ dy height) 512))
+             ;(format t "Copy V->V ~4d x ~4d: ~4d ~4d -> ~4d ~4d~%" width height sx sy dx dy)
              (dotimes (yi height)
                (dotimes (xi width)
                  (setf (aref vram (+ dx xi (* 1024 (+ dy yi))))
@@ -1122,18 +1093,21 @@
 
           ((#xE1)   ; Texpage
            (with-slots (global-texpage) this
+             ;(format t "TexPage ~8,'0X~%" command-word)
              (setf global-texpage (logand command-word #x00FFFFFF))))
-          ((#xE2) nil)   ; TODO: Texture window
+          ((#xE2)   ; TODO: Texture window
+           ;(format t "TexWindow ~8,'0X~%" command-word)
+           )
           ((#xE3)   ; Drawing area xy1
            (with-slots (clamp-x1 clamp-y1) this
              (setf clamp-x1 (logand (ash command-word  -0) #x3FF))
-             (setf clamp-y1 (logand (ash command-word -10) #x3FF)) ; 1024 high on newgpu
+             (setf clamp-y1 (logand (ash command-word -10) #x1FF)) ; 1024 high on newgpu
              ;(format t "1 ~a ~a~%" clamp-x1 clamp-y1)
              t))
           ((#xE4)   ; Drawing area xy2
            (with-slots (clamp-x2 clamp-y2) this
              (setf clamp-x2 (logand (ash command-word  -0) #x3FF))
-             (setf clamp-y2 (logand (ash command-word -10) #x3FF)) ; 1024 high on newgpu
+             (setf clamp-y2 (logand (ash command-word -10) #x1FF)) ; 1024 high on newgpu
              ;(format t "2 ~a ~a~%" clamp-x2 clamp-y2)
              t))
           ((#xE5)   ; Drawing offset
@@ -1299,55 +1273,54 @@
     ((#x10) nil)  ; "Get GPU info" but this isn't useful yet
     ))
 
-(sdl2:with-init (:everything)
-  (sdl2:with-window (window :title "PlayStation 1 GPU Emulator"
-                            :flags '(:shown)
-                            ;:w 1024 :h 512
-                            ;:w 2048 :h 1024
-                            :w 1024 :h (* 3 224)
-                            )
-    (sdl2:with-renderer (renderer window :flags '(:accelerated))
-      (with-open-file (file ;"psxgpudump.bin"
-                            "gt1gameplay.gpudump"
-                            ;"spyro3gameplay.gpudump"
-                            :direction :input
-                            :element-type 'unsigned-byte)
-        (let* ((psgpu (make-psgpu))
-               (*screen-texture*
-                 (sdl2:create-texture
-                   renderer
-                   ':bgrx8888
-                   ':streaming
-                   1024 512))
-               (*screen-renderer* renderer)
-               (*screen-window* window)
-               (buffer-chunk-count 4096)
-               ;(buffer-chunk-count 1)
-               (buffer-chunk-size 5)
-               (gpu-data-buffer (make-array (* buffer-chunk-count
-                                               buffer-chunk-size)
-                                            :element-type 'unsigned-byte)))
-          (labels ((/loop () 
-                     (tagbody
-                       loop-base
-                         (fix* ((pos (read-sequence gpu-data-buffer file)))
-                           (when (/= pos 0)
-                             (dotimes (idx (floor (/ pos 5)))
-                               (/process (* idx 5)))
-                             (when (= pos (length gpu-data-buffer))
-                               (go loop-base))))))
+(defun main (fname)
+  (sdl2:with-init (:everything)
+    (sdl2:with-window (window :title "PlayStation 1 GPU Emulator"
+                              :flags '(:shown)
+                              ;:w 1024 :h 512
+                              ;:w 2048 :h 1024
+                              :w 1024 :h (* 3 224)
+                              )
+      (sdl2:with-renderer (renderer window :flags '(:accelerated))
+        (with-open-file (file fname
+                              :direction :input
+                              :element-type 'unsigned-byte)
+          (let* ((psgpu (make-psgpu))
+                 (*screen-texture*
+                   (sdl2:create-texture
+                     renderer
+                     ':bgrx8888
+                     ':streaming
+                     1024 512))
+                 (*screen-renderer* renderer)
+                 (*screen-window* window)
+                 ;(buffer-chunk-count 4096)
+                 (buffer-chunk-count 1)
+                 (buffer-chunk-size 5)
+                 (gpu-data-buffer (make-array (* buffer-chunk-count
+                                                 buffer-chunk-size)
+                                              :element-type 'unsigned-byte)))
+            (labels ((/loop ()
+                       (tagbody
+                         loop-base
+                           (fix* ((pos (read-sequence gpu-data-buffer file)))
+                             (when (/= pos 0)
+                               (dotimes (idx (floor (/ pos 5)))
+                                 (/process (* idx 5)))
+                               (when (= pos (length gpu-data-buffer))
+                                 (go loop-base))))))
 
-                   (/process (offs)
-                     (declare (type fixnum offs))
-                     (declare (inline))
-                     (fix* ((addr (aref gpu-data-buffer (+ offs 0)))
-                            (data (logior (ash (aref gpu-data-buffer (+ offs 1))  0)
-                                          (ash (aref gpu-data-buffer (+ offs 2))  8)
-                                          (ash (aref gpu-data-buffer (+ offs 3)) 16)
-                                          (ash (aref gpu-data-buffer (+ offs 4)) 24))))
-                       (if (= 0 (logand addr #x04))
-                         (write-gp0 psgpu data)
-                         (write-gp1 psgpu data)))))
-            (/loop))))
-      )))
+                     (/process (offs)
+                       (declare (type fixnum offs))
+                       (declare (inline))
+                       (fix* ((addr (aref gpu-data-buffer (+ offs 0)))
+                              (data (logior (ash (aref gpu-data-buffer (+ offs 1))  0)
+                                            (ash (aref gpu-data-buffer (+ offs 2))  8)
+                                            (ash (aref gpu-data-buffer (+ offs 3)) 16)
+                                            (ash (aref gpu-data-buffer (+ offs 4)) 24))))
+                         (if (= 0 (logand addr #x04))
+                           (write-gp0 psgpu data)
+                           (write-gp1 psgpu data)))))
+              (/loop))))
+        ))))
 
