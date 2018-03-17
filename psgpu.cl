@@ -230,6 +230,10 @@
    (offs-y :type fixnum :initform 0)
    (disp-xbeg :type fixnum :initform 0)
    (disp-ybeg :type fixnum :initform 0)
+   (texmask-x :type fixnum :initform #xFF)
+   (texmask-y :type fixnum :initform #xFF)
+   (texoffs-x :type fixnum :initform #x00)
+   (texoffs-y :type fixnum :initform #x00)
    (screen-x1 :type fixnum :initform #x200)
    (screen-x2 :type fixnum :initform #xC00)
    (screen-y1 :type fixnum :initform #x010)
@@ -410,7 +414,9 @@
                      ))))
 
              (/get-texture ()
-               `(fix* ((pixelpos
+               `(fix* ((fetch-tx (+ (logand texmask-x tx) texoffs-x))
+                       (fetch-ty (+ (logand texmask-y ty) texoffs-y))
+                       (pixelpos
                          (ecase texbpp
                            ((4)
                               (+ clutref
@@ -420,9 +426,9 @@
                                           (logand
                                             #x7FFFF
                                             (+ texref
-                                               (ash tx -2)
-                                               (* ty 1024))))
-                                        (* -4 (logand #x3 tx))))))
+                                               (ash fetch-tx -2)
+                                               (* fetch-ty 1024))))
+                                        (* -4 (logand #x3 fetch-tx))))))
                            ((8)
                               (+ clutref
                                  (logand #x00FF
@@ -430,10 +436,10 @@
                                           (logand
                                             #x7FFFF
                                             (+ texref
-                                               (ash tx -1)
-                                               (* ty 1024))))
-                                        (* -8 (logand #x1 tx))))))
-                           ((15) (+ texref tx (* ty 1024))))))
+                                               (ash fetch-tx -1)
+                                               (* fetch-ty 1024))))
+                                        (* -8 (logand #x1 fetch-tx))))))
+                           ((15) (+ texref fetch-tx (* fetch-ty 1024))))))
                   (aref vram (logand #x7FFFF pixelpos))))
 
              (/draw-poly (index)
@@ -583,9 +589,13 @@
                        (with-slots (clamp-x1 clamp-y1
                                     clamp-x2 clamp-y2
                                     offs-x offs-y
+                                    texmask-x texmask-y
+                                    texoffs-x texoffs-y
                                     global-texpage) this
                          (declare (type fixnum clamp-x1 clamp-y1 clamp-x2 clamp-y2))
                          (declare (type fixnum offs-x offs-y global-texpage))
+                         (declare (type fixnum texmask-x texmask-y texoffs-x texoffs-y))
+
                          (incf x0 offs-x)
                          (incf x1 offs-x)
                          (incf x2 offs-x)
@@ -844,8 +854,13 @@
                    (with-slots (clamp-x1 clamp-y1
                                 clamp-x2 clamp-y2
                                 offs-x offs-y
+                                texmask-x texmask-y
+                                texoffs-x texoffs-y
                                 global-texpage) this
-                     (declare (type fixnum clamp-x1 clamp-y1 clamp-x2 clamp-y2 offs-x offs-y global-texpage))
+                     (declare (type fixnum clamp-x1 clamp-y1 clamp-x2 clamp-y2))
+                     (declare (type fixnum offs-x offs-y global-texpage))
+                     (declare (type fixnum texmask-x texmask-y texoffs-x texoffs-y))
+
                      (fix* ((cd  ,(if raw-textured
                                     #x808080
                                     `(aref gp0-buffer ,color-offset)))
@@ -903,8 +918,8 @@
                            (dotimes (rxi width)
                              (fix* ((xi (+ rxi (- clipped-x1 bx)))
                                     ,@(when texture-mapped
-                                        `((tx (logand #xFF (+ xi btx)))
-                                          (ty (logand #xFF (+ yi bty)))))
+                                        `((tx (+ xi btx))
+                                          (ty (+ yi bty))))
                                     )
                                ,@(cond
                                    (raw-textured
@@ -1097,6 +1112,17 @@
              (setf global-texpage (logand command-word #x00FFFFFF))))
           ((#xE2)   ; TODO: Texture window
            ;(format t "TexWindow ~8,'0X~%" command-word)
+           (with-slots (texmask-x texmask-y texoffs-x texoffs-y) this
+             (let* ((x-wmask (logand #x1F (lognot (ash command-word  -0))))
+                    (y-wmask (logand #x1F (lognot (ash command-word  -5))))
+                    (x-woffs (logand #x1F (ash command-word -10)))
+                    (y-woffs (logand #x1F (ash command-word -15))))
+
+               (setf texmask-x (logior #x7 (ash x-wmask 3)))
+               (setf texmask-y (logior #x7 (ash y-wmask 3)))
+               (setf texoffs-x (logand (lognot texmask-x) (ash x-woffs 3)))
+               (setf texoffs-y (logand (lognot texmask-y) (ash y-woffs 3)))
+               ))
            )
           ((#xE3)   ; Drawing area xy1
            (with-slots (clamp-x1 clamp-y1) this
