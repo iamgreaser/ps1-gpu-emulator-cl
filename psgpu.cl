@@ -266,6 +266,7 @@
    (screen-y2 :type fixnum :initform #x100)
    (screen-pixel-width :type fixnum :initform 8)
    (screen-interlace-multiplier :type fixnum :initform 1)
+   (is-24bpp :type boolean :initform nil)
    (global-texpage :type fixnum :initform 0)
    (gp0-buffer-length :type fixnum
                       :initform 0)
@@ -1174,19 +1175,43 @@
                     screen-x1 screen-y1
                     screen-x2 screen-y2
                     screen-pixel-width
-                    screen-interlace-multiplier) this
+                    screen-interlace-multiplier
+                    is-24bpp) this
     (sdl2:render-clear *screen-renderer*)
     (setf disp-xbeg (logand #x3FF data))
     (setf disp-ybeg (logand #x1FF (ash data -10)))
     (let* ((pixels (sdl2:lock-texture *screen-texture*)))
-      (dotimes (i (* 1024 512))
-        (setf (cffi:mem-aref pixels ':uint32 i)
-              (the
-                (unsigned-byte 32)
-                (ash (the (unsigned-byte 32)
-                          (color-15-to-24 (aref vram i))) 8)))))
+      (if is-24bpp
+        ;; 24 bpp
+        (dotimes (y 512)
+          (dotimes (x (floor (/ 1024 3)))
+            (fix* ((src-loc (+ (* y 1024) (* x 3)))
+                   (dst-loc (+ (* y 1024) (* x 2)))
+                   (sc0 (aref vram (+ src-loc 0)))
+                   (sc1 (aref vram (+ src-loc 1)))
+                   (sc2 (aref vram (+ src-loc 2)))
+                   (dc0 (+ (ash (logand #x00FF sc1) 16)
+                           sc0))
+                   (dc1 (+ (ash sc1 -8)
+                           (ash sc2 8))))
+
+              (setf (cffi:mem-aref pixels ':uint32 (+ dst-loc 0))
+                    (the (unsigned-byte 32) (ash dc0 8)))
+              (setf (cffi:mem-aref pixels ':uint32 (+ dst-loc 1))
+                    (the (unsigned-byte 32) (ash dc1 8)))
+              )))
+
+        ;; 15 bpp
+        (dotimes (i (* 1024 512))
+          (setf (cffi:mem-aref pixels ':uint32 i)
+                (the
+                  (unsigned-byte 32)
+                  (ash (color-15-to-24 (aref vram i)) 8))))
+        ))
     (sdl2:unlock-texture *screen-texture*)
-    (sdl2:with-rects ((src-rect disp-xbeg
+    (sdl2:with-rects ((src-rect (if is-24bpp
+                                  (floor (* disp-xbeg 2/3))
+                                  disp-xbeg)
                                 disp-ybeg
                                 (floor (/ (- screen-x2 screen-x1 -1)
                                           screen-pixel-width))
@@ -1223,7 +1248,9 @@
 (defmethod gp1-set-display-mode ((this psgpu) data)
   (declare (inline))
   (with-slots (screen-pixel-width
+               is-24bpp
                screen-interlace-multiplier) this
+    (setf is-24bpp (/= 0 (logand #x10 data)))
     (setf screen-pixel-width
           (ecase (logand #x43 data)
             ((#x00) 10)
