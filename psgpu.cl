@@ -869,7 +869,6 @@
                       (texcoord-offset  2)
                       (size-offset      (if texture-mapped 3 2))
                       )
-                 (declare (ignore semi-transparent))
                  `((when (< gp0-buffer-length ,words-needed)
                      (return-from keep-gp0-buffer nil))
                    ;(format t "rect ~2,'8X wcount=~d~%" ,index ,words-needed)
@@ -878,7 +877,9 @@
                                 offs-x offs-y
                                 global-texpage) this
                      (declare (type fixnum clamp-x1 clamp-y1 clamp-x2 clamp-y2 offs-x offs-y global-texpage))
-                     (fix* ((cd  (aref gp0-buffer ,color-offset))
+                     (fix* ((cd  ,(if raw-textured
+                                    #x808080
+                                    `(aref gp0-buffer ,color-offset)))
                             (vd  (aref gp0-buffer ,vertex-offset))
                             (bx  (+ (- (logand (+ vd #x0400) #x07FF) #x0400)
                                     offs-x))
@@ -938,10 +939,12 @@
                                     )
                                ,@(cond
                                    (raw-textured
-                                     `((fix* ((pixeldata ,(/get-texture)))
-                                         (when (/= 0 pixeldata)
-                                           (setf (aref vram (+ ibase xi)) pixeldata)
-                                           ))))
+                                     `((fix* ((cd0p ,(/get-texture)))
+                                         (when (/= 0 cd0p)
+                                           ,@(if semi-transparent
+                                               `(,@(/semi-transparent-blend 'global-texpage))
+                                               `((setf (aref vram (+ ibase xi)) cd0p))))
+                                         )))
                                    (texture-mapped
                                      `((fix* ((pixeldata ,(/get-texture)))
                                          (when (/= 0 pixeldata)
@@ -956,11 +959,16 @@
                                                            '(min #xFF (ash (* cr tex-r) -4))
                                                            '(min #xFF (ash (* cg tex-g) -4))
                                                            '(min #xFF (ash (* cb tex-b) -4)))))
-                                             (setf (aref vram (+ ibase xi)) cd0p)
+                                             ,@(if semi-transparent
+                                                 `(,@(/semi-transparent-blend 'global-texpage))
+                                                 `((setf (aref vram (+ ibase xi)) cd0p)))
                                              )))))
                                    (t
-                                     `((setf (aref vram (+ ibase xi))
-                                             (color-24-to-15 cd))))
+                                     `((fix* ((cd0p (color-24-to-15 cd)))
+                                         ,@(if semi-transparent
+                                             `(,@(/semi-transparent-blend 'global-texpage))
+                                             `((setf (aref vram (+ ibase xi)) cd0p)))
+                                         )))
                                    )
                                ))))
                        ))
