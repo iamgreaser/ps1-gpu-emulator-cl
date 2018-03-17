@@ -869,15 +869,21 @@
                       (texcoord-offset  2)
                       (size-offset      (if texture-mapped 3 2))
                       )
-                 (declare (ignore semi-transparent raw-textured))
+                 (declare (ignore semi-transparent))
                  `((when (< gp0-buffer-length ,words-needed)
                      (return-from keep-gp0-buffer nil))
                    ;(format t "rect ~2,'8X wcount=~d~%" ,index ,words-needed)
-                   (with-slots (global-texpage) this
+                   (with-slots (clamp-x1 clamp-y1
+                                clamp-x2 clamp-y2
+                                offs-x offs-y
+                                global-texpage) this
+                     (declare (type fixnum clamp-x1 clamp-y1 clamp-x2 clamp-y2 offs-x offs-y global-texpage))
                      (fix* ((cd  (aref gp0-buffer ,color-offset))
                             (vd  (aref gp0-buffer ,vertex-offset))
-                            (bx  (- (logand (+ vd #x0400) #x07FF) #x0400))
-                            (by  (- (logand (+ (ash vd -16) #x0400) #x07FF) #x0400))
+                            (bx  (+ (- (logand (+ vd #x0400) #x07FF) #x0400)
+                                    offs-x))
+                            (by  (+ (- (logand (+ (ash vd -16) #x0400) #x07FF) #x0400)
+                                    offs-y))
                             ,@(when texture-mapped
                                 `((texbpp
                                     (ecase (logand #x3
@@ -907,27 +913,56 @@
                                       ((1) 1)
                                       ((2) 8)
                                       ((3) 16)))
+                            (clipped-x1 (max clamp-x1 bx))
+                            (clipped-y1 (max clamp-y1 by))
+                            (clipped-x2 (min (1+ clamp-x2) (+ bx width)))
+                            (clipped-y2 (min (1+ clamp-y2) (+ by height)))
+                            (width (- clipped-x2 clipped-x1))
+                            (height (- clipped-y2 clipped-y1))
                             )
                        (declare (ignorable cd))
+
+                       (assert (<= 0 clamp-x1 clipped-x1))
+                       (assert (<= clipped-x2 (1+ clamp-x2) 1024))
+                       (assert (<= 0 clamp-y1 clipped-y1))
+                       (assert (<= clipped-y2 (1+ clamp-y2) 512))
+
                        (dotimes (yi height)
-                         (dotimes (xi width)
-                           (fix* ((x (+ xi bx))
-                                  (y (+ yi by))
-                                  ,@(when texture-mapped
-                                      `((tx (+ xi btx))
-                                        (ty (+ yi bty))))
-                                  )
-                             ,@(cond
-                                 ;; TODO: non-raw textures
-                                 ;; TODO: hoist this out depending on bpp mode
-                                 (texture-mapped
-                                   `((let* ((pixeldata ,(/get-texture)))
-                                       (when (/= 0 pixeldata)
-                                         (putpixel this x y pixeldata)))))
-                                 (t
-                                   `((putpixel this x y (color-24-to-15 cd))))
-                                 )
-                             )))
+                         (fix* ((yi (+ yi (- clipped-y1 by)))
+                                (ibase (+ bx (* 1024 (+ by yi)))))
+                           (dotimes (xi width)
+                             (fix* ((xi (+ xi (- clipped-x1 bx)))
+                                    ,@(when texture-mapped
+                                        `((tx (+ xi btx))
+                                          (ty (+ yi bty))))
+                                    )
+                               ,@(cond
+                                   (raw-textured
+                                     `((fix* ((pixeldata ,(/get-texture)))
+                                         (when (/= 0 pixeldata)
+                                           (setf (aref vram (+ ibase xi)) pixeldata)
+                                           ))))
+                                   (texture-mapped
+                                     `((fix* ((pixeldata ,(/get-texture)))
+                                         (when (/= 0 pixeldata)
+                                           (fix* ((pixdata ,(/get-texture))
+                                                  (tex-r (logand #x1F (ash pixdata   0)))
+                                                  (tex-g (logand #x1F (ash pixdata  -5)))
+                                                  (tex-b (logand #x1F (ash pixdata -10)))
+                                                  (cr (logand #xFF (ash cd   0)))
+                                                  (cg (logand #xFF (ash cd  -8)))
+                                                  (cb (logand #xFF (ash cd -16)))
+                                                  (cd0p ,(/converting-24-to-15
+                                                           '(min #xFF (ash (* cr tex-r) -4))
+                                                           '(min #xFF (ash (* cg tex-g) -4))
+                                                           '(min #xFF (ash (* cb tex-b) -4)))))
+                                             (setf (aref vram (+ ibase xi)) cd0p)
+                                             )))))
+                                   (t
+                                     `((setf (aref vram (+ ibase xi))
+                                             (color-24-to-15 cd))))
+                                   )
+                               ))))
                        ))
                      )))
              )
@@ -1238,8 +1273,8 @@
                             )
     (sdl2:with-renderer (renderer window :flags '(:accelerated))
       (with-open-file (file ;"psxgpudump.bin"
-                            ;"gt1gameplay.gpudump"
-                            "spyro3gameplay.gpudump"
+                            "gt1gameplay.gpudump"
+                            ;"spyro3gameplay.gpudump"
                             :direction :input
                             :element-type 'unsigned-byte)
         (let* ((psgpu (make-psgpu))
@@ -1258,12 +1293,14 @@
                                                buffer-chunk-size)
                                             :element-type 'unsigned-byte)))
           (labels ((/loop () 
-                     (fix* ((pos (read-sequence gpu-data-buffer file)))
-                       (when (/= pos 0)
-                         (dotimes (idx (floor (/ pos 5)))
-                           (/process (* idx 5)))
-                         (when (= pos (length gpu-data-buffer))
-                           (/loop)))))
+                     (tagbody
+                       loop-base
+                         (fix* ((pos (read-sequence gpu-data-buffer file)))
+                           (when (/= pos 0)
+                             (dotimes (idx (floor (/ pos 5)))
+                               (/process (* idx 5)))
+                             (when (= pos (length gpu-data-buffer))
+                               (go loop-base))))))
 
                    (/process (offs)
                      (declare (type fixnum offs))
